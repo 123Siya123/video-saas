@@ -1,16 +1,13 @@
 # Use an official Python runtime as a parent image
 FROM python:3.9-slim
 
-# Install system dependencies (ImageMagick is required for MoviePy)
+# Install system dependencies
+# We need ffmpeg for video, imagemagick for backend moviepy ops, and fonts for text
 RUN apt-get update && apt-get install -y \
     imagemagick \
     ffmpeg \
     fonts-dejavu \
     && rm -rf /var/lib/apt/lists/*
-
-# Fix ImageMagick policy to allow text processing
-# This is a common bug fix for MoviePy on Linux
-RUN sed -i 's/none/read,write/g' /etc/ImageMagick-6/policy.xml
 
 # Set the working directory
 WORKDIR /app
