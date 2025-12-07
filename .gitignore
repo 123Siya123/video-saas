@@ -1,0 +1,10 @@
+# Python/Backend environment files
+/backend/.env
+
+# JavaScript/Frontend environment files
+/frontend/.env
+
+# Other common Git ignores (like dependencies, build artifacts, etc.)
+/node_modules
+/backend/__pycache__
+/frontend/dist

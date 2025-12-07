@@ -5,13 +5,21 @@ from moviepy.editor import VideoFileClip
 from supabase import create_client, Client
 import shutil
 import os
+from dotenv import load_dotenv
 import uuid
 import datetime
 from services import ai, video
 
+load_dotenv()
+
 # --- CONFIGURATION ---
-SUPABASE_URL = "https://zasbsaanmlsuytesxmsk.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inphc2JzYWFubWxzdXl0ZXN4bXNrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NTAxODkxMiwiZXhwIjoyMDgwNTk0OTEyfQ.mlmjYxqdOKP9dWp-DPwMXE-5-OXJ882etCRtJkSWF5E" # SERVICE ROLE KEY REQ HERE FOR UPLOAD
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise EnvironmentError("SUPABASE_URL or SUPABASE_SERVICE_KEY not found in environment variables.")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
