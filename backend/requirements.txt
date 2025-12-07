@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+groq
+moviepy==1.0.3
+requests
+google-auth-oauthlib
+google-api-python-client
+supabase
+imageio==2.31.1
