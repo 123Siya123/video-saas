@@ -13,6 +13,11 @@ import { useNavigate } from 'react-router-dom'
 
 function cn(...inputs) { return twMerge(clsx(inputs)) }
 
+// --- API CONFIGURATION ---
+// This looks for the VITE_API_URL environment variable (set in Render).
+// If not found, it defaults to localhost for local development.
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+
 export default function Dashboard() {
   const [user, setUser] = useState(null)
   const [isRecording, setIsRecording] = useState(false)
@@ -49,8 +54,8 @@ export default function Dashboard() {
 
     const interval = setInterval(async () => {
       try {
-        const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
-        axios.get(`${API_URL}/logs`)
+        // FIXED: Uses API_URL variable instead of hardcoded localhost
+        const logRes = await axios.get(`${API_URL}/logs`)
         if (logRes.data.logs) {
           setLogs(prev => {
              const combined = [...prev, ...logRes.data.logs]
@@ -59,7 +64,8 @@ export default function Dashboard() {
         }
 
         const currentUserId = userRef.current ? userRef.current.id : "offline-user"
-        const gallRes = await axios.get(`http://127.0.0.1:8000/gallery/${currentUserId}`)
+        // FIXED: Uses API_URL variable
+        const gallRes = await axios.get(`${API_URL}/gallery/${currentUserId}`)
         if (gallRes.data) setGallery(gallRes.data)
       } catch (e) {}
     }, 1000)
@@ -149,7 +155,8 @@ export default function Dashboard() {
     formData.append("auto_upload", isAuto ? "true" : "false") 
 
     try { 
-      const res = await axios.post("http://127.0.0.1:8000/upload-chunk", formData)
+      // FIXED: Uses API_URL variable
+      const res = await axios.post(`${API_URL}/upload-chunk`, formData)
       if (res.status === 200) addLog(`✅ Chunk_${id} sent`)
     } catch (err) {
       console.error(err)
