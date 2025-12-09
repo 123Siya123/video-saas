@@ -8,14 +8,15 @@ import shutil
 import os
 import uuid
 import datetime
-import time
-from services import ai, video, social  # Ensure social.py is updated with the BYOK logic provided previously
+import requests # Needed for downloading remote videos
+from services import ai, video, social
 
 # --- CONFIGURATION ---
+# Ensure these are set in your Render Environment Variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://zasbsaanmlsuytesxmsk.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "YOUR_SERVICE_ROLE_KEY")
 
-# Initialize Client
+# Initialize Supabase Client
 supabase: Client = None
 def get_supabase():
     global supabase
@@ -26,7 +27,7 @@ def get_supabase():
             print(f"Supabase Init Error: {e}")
     return supabase
 
-# Init immediately
+# Initialize immediately to fail fast if config is wrong
 get_supabase()
 
 app = FastAPI()
@@ -41,7 +42,7 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://video-saas-1.onrender.com",
-    # Add your frontend production URL here when deployed
+    # Add your actual frontend domain here once deployed
 ]
 
 app.add_middleware(
@@ -55,6 +56,7 @@ app.add_middleware(
 UPLOAD_DIR = "temp_storage"
 if not os.path.exists(UPLOAD_DIR): os.makedirs(UPLOAD_DIR)
 
+# --- LOGGING UTILS ---
 UI_LOGS = []
 def log_ui(msg):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -66,26 +68,29 @@ def log_ui(msg):
 @app.get("/logs")
 def get_logs(): return {"logs": UI_LOGS}
 
+# --- DATABASE & STORAGE ROUTES ---
+
 @app.get("/gallery/{user_id}")
 def get_gallery(user_id: str):
     db = get_supabase()
     try:
+        # Fetch clips sorted by newest
         response = db.table("clips").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
         return response.data
     except Exception as e:
-        # Suppress the specific 'ConnectionTerminated' noise
-        err_str = str(e)
-        if "ConnectionTerminated" not in err_str:
-            print(f"DB Error: {err_str}")
+        # Filter out connection noise in logs
+        if "ConnectionTerminated" not in str(e):
+            print(f"DB Error: {e}")
         return []
 
 @app.get("/video/{filename}")
 def get_video(filename: str):
+    """Serves local temporary video files"""
     path = os.path.join(UPLOAD_DIR, filename)
     if os.path.exists(path): return FileResponse(path)
     return {"error": "File not found"}
 
-# --- AUTH & SOCIAL MEDIA ENDPOINTS (BYOK) ---
+# --- SOCIAL AUTHENTICATION (BYOK) ---
 
 class AuthInit(BaseModel):
     user_id: str
@@ -96,69 +101,106 @@ class AuthInit(BaseModel):
 class AuthCallback(BaseModel):
     user_id: str
     code: str
+    platform: str
 
 @app.post("/auth/init")
 def auth_init(data: AuthInit):
-    """User submits their keys, we give them a Google URL to authorize"""
+    """
+    Step 1: User provides keys. We save them and generate a Login URL.
+    """
     url = social.get_auth_url(data.user_id, data.platform, data.client_id, data.client_secret)
     if url:
         return {"url": url}
-    return {"error": "Failed to generate URL"}
+    return {"error": "Failed to generate auth URL. Check server logs."}
 
 @app.post("/auth/callback")
 def auth_callback(data: AuthCallback):
-    """User finished Google Login, we exchange code for tokens and save them"""
-    return social.exchange_code_for_token(data.user_id, data.code)
+    """
+    Step 2: User returns from Platform with a code. We exchange it for tokens.
+    """
+    return social.exchange_code_for_token(data.user_id, data.code, data.platform)
 
-@app.post("/upload/youtube")
-def upload_youtube(
+@app.post("/upload")
+def upload_content(
     user_id: str = Form(...),
-    video_filename: str = Form(...) 
+    video_filename: str = Form(...), # Can be a local filename or a full Cloud URL
+    caption: str = Form(...),
+    platforms: str = Form(...) # Comma-separated: "youtube,instagram,twitter"
 ):
     """
-    Uploads a video to the user's connected YouTube channel.
-    Note: video_filename should be the full URL or local filename.
+    Unified upload endpoint for all platforms.
+    Handles downloading remote files if necessary.
     """
-    # 1. Resolve File Path
-    # Ideally, download from Supabase Storage if it's a URL
+    platform_list = [p.strip() for p in platforms.split(",")]
+    results = {}
     local_path = ""
-    
+    is_temp_download = False
+
+    # 1. Resolve Video File (Local vs Remote)
     if "http" in video_filename:
-        # It's a URL, download it temporarily
+        # It's a URL (from Supabase/S3), download it first
         try:
-            import requests
+            log_ui(f"📥 Downloading video for upload...")
             response = requests.get(video_filename, stream=True)
-            temp_name = f"upload_{uuid.uuid4().hex}.mp4"
+            temp_name = f"social_upload_{uuid.uuid4().hex}.mp4"
             local_path = os.path.join(UPLOAD_DIR, temp_name)
             with open(local_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
+            is_temp_download = True
         except Exception as e:
             return {"error": f"Failed to download video: {e}"}
     else:
-        # Assume it's a local filename in temp_storage (if still exists)
+        # It's a local file in temp_storage
         local_path = os.path.join(UPLOAD_DIR, os.path.basename(video_filename))
     
     if not os.path.exists(local_path):
-        return {"error": "Video file not found. Please re-process or use a persistent URL."}
+        return {"error": "Video file not found on server."}
 
-    # 2. Upload
-    result = social.upload_video(user_id, local_path, "Viral AI Clip #shorts", "Generated by DirectorFlow")
-    
-    # 3. Cleanup temp download if we made one
-    if "http" in video_filename and os.path.exists(local_path):
-        os.remove(local_path)
+    # 2. Iterate and Upload
+    for p in platform_list:
+        log_ui(f"🚀 Uploading to {p}...")
         
-    return result
+        # Instagram requires a Public URL, YouTube requires a Local File
+        # social.py handles this distinction, but we pass both just in case or handle inside main logic
+        # For simplicity here: we pass the logic to social.py which decides.
+        # But wait, Instagram needs the URL. If we downloaded it, we might have the original URL in `video_filename`
+        
+        path_to_pass = local_path
+        if p == 'instagram' and "http" in video_filename:
+            path_to_pass = video_filename # Pass the URL
+        
+        try:
+            res = social.upload_video(user_id, p, path_to_pass, caption, caption)
+            results[p] = res
+            if res.get("status") == "success":
+                log_ui(f"✅ {p}: Upload Successful")
+            else:
+                log_ui(f"❌ {p}: {res.get('error')}")
+        except Exception as e:
+            results[p] = {"error": str(e)}
+            log_ui(f"❌ {p}: Exception {e}")
 
-# --- VIDEO PIPELINE ---
+    # 3. Cleanup temp file
+    if is_temp_download and os.path.exists(local_path):
+        os.remove(local_path)
+
+    return results
+
+# --- VIDEO PROCESSING PIPELINE ---
 
 def convert_to_clean_mp4(input_path):
+    """Converts WebM to MP4 with AAC audio (compatible with IG/TikTok)"""
     output_path = input_path.replace(".webm", "_clean.mp4")
     try:
         clip = VideoFileClip(input_path)
-        # Use aac codec for better social media compatibility
-        clip.write_videofile(output_path, codec='libx264', audio_codec='aac', preset='ultrafast', logger=None)
+        clip.write_videofile(
+            output_path, 
+            codec='libx264', 
+            audio_codec='aac', # Crucial for social media
+            preset='ultrafast', 
+            logger=None
+        )
         clip.close()
         return output_path
     except Exception as e:
@@ -166,6 +208,7 @@ def convert_to_clean_mp4(input_path):
         return None
 
 def upload_to_supabase_storage(local_path, destination_name):
+    """Uploads processed video to Supabase Storage Bucket"""
     db = get_supabase()
     try:
         with open(local_path, 'rb') as f:
@@ -182,12 +225,19 @@ def upload_to_supabase_storage(local_path, destination_name):
         return None
 
 def process_video_pipeline(raw_file_path, user_id):
+    """
+    Core logic: Convert -> Transcribe -> Analyze -> Edit -> Upload to Cloud
+    """
     filename = os.path.basename(raw_file_path)
     log_ui(f"⚙️ Processing for User: {user_id[:5]}...")
 
+    # 1. Convert
     clean_video_path = convert_to_clean_mp4(raw_file_path)
-    if not clean_video_path: cleanup(raw_file_path); return
+    if not clean_video_path: 
+        cleanup(raw_file_path)
+        return
 
+    # 2. Transcribe
     log_ui("🎙️ Transcribing...")
     temp_audio = clean_video_path.replace(".mp4", ".mp3")
     try:
@@ -200,12 +250,15 @@ def process_video_pipeline(raw_file_path, user_id):
         cleanup(raw_file_path, clean_video_path, temp_audio)
         return
 
+    # 3. Analyze
     log_ui("🧠 Analyzing...")
     ai_response = ai.analyze_viral_clips(transcript_data)
     clips_found = ai_response.get('clips', [])
     log_ui(f"✂️ Found {len(clips_found)} clip(s).")
 
+    # 4. Edit & Save
     try:
+        # Note: process_video_clips now handles dynamic font sizing
         final_videos = video.process_video_clips(clean_video_path, ai_response, transcript_data)
         
         for vid_path, title in final_videos:
@@ -215,10 +268,12 @@ def process_video_pipeline(raw_file_path, user_id):
             public_url = upload_to_supabase_storage(vid_path, local_filename)
             
             if public_url:
+                # Find metadata for this specific clip
                 clip_meta = next((c for c in clips_found if c['title'] == title), None)
                 score = clip_meta['score'] if clip_meta else 0
                 desc = clip_meta.get('viral_description', "Auto-generated clip")
 
+                # Save to Database
                 data = {
                     "user_id": user_id,
                     "filename": public_url,
@@ -228,6 +283,8 @@ def process_video_pipeline(raw_file_path, user_id):
                 }
                 get_supabase().table("clips").insert(data).execute()
                 log_ui(f"✅ PUBLISHED: {title}")
+                
+                # Cleanup local processed clip
                 if os.path.exists(vid_path): os.remove(vid_path)
             
     except Exception as e:
@@ -235,6 +292,7 @@ def process_video_pipeline(raw_file_path, user_id):
         import traceback
         traceback.print_exc()
 
+    # 5. Cleanup Source Files
     cleanup(raw_file_path, clean_video_path, temp_audio)
 
 def cleanup(*files):
@@ -249,10 +307,14 @@ async def upload_chunk(
     file: UploadFile = File(...),
     user_id: str = Form(...) 
 ):
+    """
+    Receives video chunks from frontend, saves locally, and starts background processing.
+    """
     filename = f"chunk_{uuid.uuid4().hex}.webm"
     file_path = os.path.join(UPLOAD_DIR, filename)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
+    # Offload processing to background so UI doesn't hang
     background_tasks.add_task(process_video_pipeline, file_path, user_id)
     return {"status": "received"}
