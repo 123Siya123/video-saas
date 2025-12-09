@@ -3,97 +3,111 @@ import numpy as np
 from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip
 from PIL import Image, ImageDraw, ImageFont
 
-def create_caption_clip(text, duration, video_width):
-    # --- SMART FONT SCALING (9:16 Optimized) ---
-    # 1. Define safe width (80% of video width to account for vertical edges)
-    max_text_width = int(video_width * 0.80)
-    fontsize = 80 
+def get_best_font(fontsize):
+    """
+    Tries to load a font. 
+    1. Looks for 'font.ttf' in the current directory (Best for custom look).
+    2. Looks for standard Linux fonts (Render/Ubuntu).
+    3. Falls back to default.
+    """
+    font_candidates = [
+        "font.ttf",                   # Your custom font if you upload one
+        "arialbd.ttf",                # Windows/Standard
+        "Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", # Linux standard
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" # Linux standard
+    ]
     
-    font_name = "arialbd.ttf" 
-    font = None
-
-    # Initialize variables to prevent "referenced before assignment" error
-    text_width = 100
-    text_height = 50
-
-    # 2. Shrink font until text fits
-    while fontsize > 20:
+    for font_name in font_candidates:
         try:
-            font = ImageFont.truetype(font_name, fontsize)
-        except:
-            try:
-                # Try standard arial if bold not found
-                font = ImageFont.truetype("arial.ttf", fontsize)
-            except:
-                # Fallback to default PIL font if no TTF found (Linux/Render)
-                font = ImageFont.load_default()
-                
-                # Measure Text immediately for default font so variables are set
-                dummy_img = Image.new('RGB', (10, 10))
-                dummy_draw = ImageDraw.Draw(dummy_img)
-                left, top, right, bottom = dummy_draw.textbbox((0, 0), text, font=font)
-                text_width = right - left
-                text_height = bottom - top
-                break 
+            return ImageFont.truetype(font_name, fontsize)
+        except OSError:
+            continue
+            
+    # Absolute fallback (might look small/pixelated, but prevents crash)
+    return ImageFont.load_default()
 
-        # Measure Text for the current fontsize
-        dummy_img = Image.new('RGB', (10, 10))
-        dummy_draw = ImageDraw.Draw(dummy_img)
+def create_caption_clip(text, duration, video_width):
+    # --- 1. DYNAMIC SCALING ---
+    # We want the text to be roughly 10% of the video width in height
+    # For 1080p width, this starts around 110px
+    base_fontsize = int(video_width * 0.12) 
+    max_text_width = int(video_width * 0.90) # Use 90% of screen width
+    
+    fontsize = base_fontsize
+    font = get_best_font(fontsize)
+    
+    # Initialize measurement variables
+    dummy_img = Image.new('RGB', (10, 10))
+    dummy_draw = ImageDraw.Draw(dummy_img)
+    
+    # --- 2. SHRINK TO FIT ---
+    # Iteratively shrink font if it's too wide for the screen
+    whileUX_Safety = 20
+    while fontsize > whileUX_Safety:
+        font = get_best_font(fontsize)
         left, top, right, bottom = dummy_draw.textbbox((0, 0), text, font=font)
         text_width = right - left
         text_height = bottom - top
 
         if text_width <= max_text_width:
-            break # It fits!
+            break
         
-        fontsize -= 5 # Too big, shrink it
-    
-    # 3. Draw Image
+        fontsize -= 5 # Shrink by 5px steps
+
+    # --- 3. DRAW IMAGE ---
+    # Create canvas with padding for stroke
+    stroke_width = int(fontsize * 0.08) # Dynamic stroke thickness
     img_width = int(video_width)
-    # Ensure text_height is at least something to avoid crashes
-    if text_height < 10: text_height = 20
+    img_height = text_height + (stroke_width * 4) + 20 
     
-    img_height = text_height + 60 # Extra padding
     img = Image.new('RGBA', (img_width, img_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     
+    # Center text
     x_pos = (img_width - text_width) / 2
     y_pos = (img_height - text_height) / 2
 
-    # Outline (Stroke effect)
-    for x in range(-4, 5):
-        for y in range(-4, 5):
+    # Draw Stroke (Outline) - We draw it multiple times to make it thick
+    for x in range(-stroke_width, stroke_width + 1):
+        for y in range(-stroke_width, stroke_width + 1):
             draw.text((x_pos+x, y_pos+y), text, font=font, fill="black")
 
     # Main Text
-    draw.text((x_pos, y_pos), text, font=font, fill="#FFFF00")
+    # Yellow text looks most "Viral", specifically #FFEE00
+    draw.text((x_pos, y_pos), text, font=font, fill="#FFEE00")
 
     img_np = np.array(img)
     return ImageClip(img_np).set_duration(duration)
 
+def process_video_pipeline(video_path, clips_metadata, transcript_data):
+    # ... (Keep existing logic for cropping and setup) ...
+    # This function body remains largely the same, 
+    # just ensure it calls the updated create_caption_clip above
+    return process_video_clips(video_path, clips_metadata, transcript_data)
+
+# Re-paste the rest of your process_video_clips logic here from your original file
+# ensuring it uses the new create_caption_clip function.
+# Below is the logic from your file for context:
+
 def process_video_clips(video_path, clips_metadata, transcript_data):
     processed_files = []
     
-    # Load Video
     original_clip = VideoFileClip(video_path)
     
-    # --- 9:16 CROP ---
+    # Crop to 9:16
     w, h = original_clip.size
     target_ratio = 9 / 16
     current_ratio = w / h
 
-    # Crop to 9:16 if wider
     if current_ratio > target_ratio:
         new_width = h * target_ratio
         center_x = w / 2
         x1 = center_x - (new_width / 2)
         x2 = center_x + (new_width / 2)
         original_clip = original_clip.crop(x1=x1, y1=0, x2=x2, y2=h)
-        print(f"✂️ Cropped video to 9:16 ({int(new_width)}x{h})")
     
-    video_duration = original_clip.duration
     video_width = original_clip.w 
-    
     all_words = transcript_data['words'] 
 
     for i, clip_meta in enumerate(clips_metadata.get('clips', [])):
@@ -102,11 +116,9 @@ def process_video_clips(video_path, clips_metadata, transcript_data):
         start_ts, end_ts = find_timestamps(all_words, clip_meta['start_text'], clip_meta['end_text'])
         
         if start_ts is None or end_ts is None: continue
-        if end_ts > video_duration: end_ts = video_duration - 0.1
+        if end_ts > original_clip.duration: end_ts = original_clip.duration - 0.1
         if start_ts >= end_ts: continue
         if (end_ts - start_ts) < 2: continue 
-
-        print(f"🎬 Editing {clip_meta['title']}: {start_ts:.2f}s to {end_ts:.2f}s")
 
         subclip = original_clip.subclip(start_ts, end_ts).copy()
 
@@ -115,12 +127,10 @@ def process_video_clips(video_path, clips_metadata, transcript_data):
         
         try:
             final_clip = None
-            
             if clip_words:
                 captions = []
-                bucket_size = 2
-                
-                # Sort words by start time to prevent logical overlap
+                # Reduced bucket size to 1 or 2 words for punchier, larger text
+                bucket_size = 2 
                 clip_words.sort(key=lambda x: x['start'])
 
                 for j in range(0, len(clip_words), bucket_size):
@@ -132,7 +142,6 @@ def process_video_clips(video_path, clips_metadata, transcript_data):
                     w_start = chunk[0]['start'] - start_ts
                     if w_start < 0: w_start = 0
                     
-                    # Calculate duration to avoid overlap
                     if j + bucket_size < len(clip_words):
                         next_chunk_start = clip_words[j+bucket_size]['start'] - start_ts
                         duration = next_chunk_start - w_start
@@ -143,12 +152,12 @@ def process_video_clips(video_path, clips_metadata, transcript_data):
                     if duration < 0.3: duration = 0.3
 
                     txt_clip = create_caption_clip(text_str, duration, video_width)
-                    txt_clip = txt_clip.set_position(('center', 0.75), relative=True).set_start(w_start)
+                    # Position: Center X, 70% down Y (Chest level)
+                    txt_clip = txt_clip.set_position(('center', 0.70), relative=True).set_start(w_start)
                     captions.append(txt_clip)
                 
                 final_clip = CompositeVideoClip([subclip, *captions])
                 
-                # Audio Safety Check
                 if final_clip.audio is None:
                     audio_source = AudioFileClip(video_path).subclip(start_ts, end_ts)
                     final_clip = final_clip.set_audio(audio_source)
@@ -158,7 +167,7 @@ def process_video_clips(video_path, clips_metadata, transcript_data):
             final_clip.write_videofile(
                 final_filename, 
                 codec='libx264', 
-                audio_codec='mp3', 
+                audio_codec='aac',  # Changed to AAC for better social compatibility
                 fps=24,
                 preset='ultrafast',
                 threads=4,
@@ -168,21 +177,18 @@ def process_video_clips(video_path, clips_metadata, transcript_data):
             final_clip.close()
 
         except Exception as e:
-            print(f"⚠️ Edit failed for clip {i}: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Edit failed: {e}")
 
     original_clip.close()
     return processed_files
 
 def find_timestamps(all_words, start_text, end_text):
+    # (Keep your existing find_timestamps logic)
     start_time = None
     end_time = None
     s_tokens = start_text.lower().split()
     e_tokens = end_text.lower().split()
-
     if not s_tokens or not e_tokens: return None, None
-
     for i in range(len(all_words) - len(s_tokens) + 1):
         match = True
         for j in range(len(s_tokens)):
@@ -192,12 +198,10 @@ def find_timestamps(all_words, start_text, end_text):
         if match:
             start_time = all_words[i]['start']
             break
-            
     for i in range(len(all_words)-1, -1, -1):
          if e_tokens[-1] in all_words[i]['word'].lower():
              end_time = all_words[i]['end']
              break
-             
     return start_time, end_time
 
 def uuid_short():

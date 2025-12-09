@@ -7,13 +7,11 @@ import shutil
 import os
 import uuid
 import datetime
-from services import ai, video
+from services import ai, video, social  # Make sure social.py is created as per previous step
 
 # --- CONFIGURATION ---
-# On Render, these should be set in the "Environment" tab.
-# We use os.environ to get them securely, or fallback to your hardcoded strings for safety.
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://zasbsaanmlsuytesxmsk.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "YOUR_SERVICE_ROLE_KEY_HERE") # Ensure this is set!
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "YOUR_SERVICE_ROLE_KEY")
 
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -22,7 +20,7 @@ except Exception as e:
 
 app = FastAPI()
 
-# --- HEALTH CHECK (FIXES RENDER DEPLOY) ---
+# --- HEALTH CHECK ---
 @app.get("/")
 def health_check():
     return {"status": "active", "service": "Laundry SaaS Backend"}
@@ -31,7 +29,8 @@ def health_check():
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://video-saas-1.onrender.com"
+    "https://video-saas-1.onrender.com",
+    # Add your frontend Render URL here if different
 ]
 
 app.add_middleware(
@@ -71,13 +70,37 @@ def get_video(filename: str):
     if os.path.exists(path): return FileResponse(path)
     return {"error": "File not found"}
 
-# --- PIPELINE ---
+# --- SOCIAL MEDIA ENDPOINTS (NEW) ---
+
+@app.post("/social/connect")
+def social_connect(user_id: str = Form(...)):
+    """Generates the link for a user to login to their TikTok/YouTube via Ayrshare"""
+    link = social.generate_connect_link(user_id)
+    if link:
+        return {"status": "success", "url": link}
+    return {"status": "error", "message": "Could not generate link"}
+
+@app.post("/social/post")
+def social_post(
+    user_id: str = Form(...),
+    video_url: str = Form(...),
+    caption: str = Form(...),
+    platforms: str = Form(...) # Expects comma-separated string: "youtube,tiktok"
+):
+    """Triggers the actual upload to social networks"""
+    platform_list = [p.strip() for p in platforms.split(",")]
+    
+    result = social.post_to_networks(user_id, video_url, caption, platform_list)
+    return result
+
+# --- VIDEO PIPELINE ---
 
 def convert_to_clean_mp4(input_path):
     output_path = input_path.replace(".webm", "_clean.mp4")
     try:
         clip = VideoFileClip(input_path)
-        clip.write_videofile(output_path, codec='libx264', audio_codec='mp3', preset='ultrafast', logger=None)
+        # Using aac audio codec ensures better compatibility with social platforms
+        clip.write_videofile(output_path, codec='libx264', audio_codec='aac', preset='ultrafast', logger=None)
         clip.close()
         return output_path
     except Exception as e:
@@ -124,6 +147,7 @@ def process_video_pipeline(raw_file_path, user_id):
     log_ui(f"✂️ Found {len(clips_found)} clip(s).")
 
     try:
+        # video.process_video_clips now handles the larger captions logic internally
         final_videos = video.process_video_clips(clean_video_path, ai_response, transcript_data)
         
         for vid_path, title in final_videos:
@@ -150,6 +174,8 @@ def process_video_pipeline(raw_file_path, user_id):
             
     except Exception as e:
         log_ui(f"❌ Edit Error: {e}")
+        import traceback
+        traceback.print_exc()
 
     cleanup(raw_file_path, clean_video_path, temp_audio)
 
