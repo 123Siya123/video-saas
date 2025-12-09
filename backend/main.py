@@ -7,16 +7,26 @@ import shutil
 import os
 import uuid
 import datetime
-from services import ai, video, social  # Make sure social.py is created as per previous step
+import time
+from services import ai, video, social
 
 # --- CONFIGURATION ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://zasbsaanmlsuytesxmsk.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "YOUR_SERVICE_ROLE_KEY")
 
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    print(f"Supabase Init Error: {e}")
+# Initialize Client
+supabase: Client = None
+def get_supabase():
+    global supabase
+    if supabase is None:
+        try:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception as e:
+            print(f"Supabase Init Error: {e}")
+    return supabase
+
+# Init immediately
+get_supabase()
 
 app = FastAPI()
 
@@ -30,7 +40,6 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://video-saas-1.onrender.com",
-    # Add your frontend Render URL here if different
 ]
 
 app.add_middleware(
@@ -57,11 +66,15 @@ def get_logs(): return {"logs": UI_LOGS}
 
 @app.get("/gallery/{user_id}")
 def get_gallery(user_id: str):
+    db = get_supabase()
     try:
-        response = supabase.table("clips").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
+        response = db.table("clips").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
         return response.data
     except Exception as e:
-        print(f"DB Error: {e}")
+        # Suppress the specific 'ConnectionTerminated' noise, it usually reconnects automatically next request
+        err_str = str(e)
+        if "ConnectionTerminated" not in err_str:
+            print(f"DB Error: {err_str}")
         return []
 
 @app.get("/video/{filename}")
@@ -70,36 +83,33 @@ def get_video(filename: str):
     if os.path.exists(path): return FileResponse(path)
     return {"error": "File not found"}
 
-# --- SOCIAL MEDIA ENDPOINTS (NEW) ---
+# --- SOCIAL MEDIA ENDPOINTS ---
 
 @app.post("/social/connect")
 def social_connect(user_id: str = Form(...)):
-    """Generates the link for a user to login to their TikTok/YouTube via Ayrshare"""
     link = social.generate_connect_link(user_id)
     if link:
         return {"status": "success", "url": link}
-    return {"status": "error", "message": "Could not generate link"}
+    # If no link, return error so frontend sees it
+    return {"status": "error", "message": "Check server logs. API Key might be invalid."}
 
 @app.post("/social/post")
 def social_post(
     user_id: str = Form(...),
     video_url: str = Form(...),
     caption: str = Form(...),
-    platforms: str = Form(...) # Expects comma-separated string: "youtube,tiktok"
+    platforms: str = Form(...) 
 ):
-    """Triggers the actual upload to social networks"""
     platform_list = [p.strip() for p in platforms.split(",")]
-    
     result = social.post_to_networks(user_id, video_url, caption, platform_list)
     return result
 
-# --- VIDEO PIPELINE ---
+# --- VIDEO PIPELINE (Standard) ---
 
 def convert_to_clean_mp4(input_path):
     output_path = input_path.replace(".webm", "_clean.mp4")
     try:
         clip = VideoFileClip(input_path)
-        # Using aac audio codec ensures better compatibility with social platforms
         clip.write_videofile(output_path, codec='libx264', audio_codec='aac', preset='ultrafast', logger=None)
         clip.close()
         return output_path
@@ -108,9 +118,10 @@ def convert_to_clean_mp4(input_path):
         return None
 
 def upload_to_supabase_storage(local_path, destination_name):
+    db = get_supabase()
     try:
         with open(local_path, 'rb') as f:
-            supabase.storage.from_("videos").upload(
+            db.storage.from_("videos").upload(
                 path=destination_name,
                 file=f,
                 file_options={"content-type": "video/mp4"}
@@ -147,7 +158,6 @@ def process_video_pipeline(raw_file_path, user_id):
     log_ui(f"✂️ Found {len(clips_found)} clip(s).")
 
     try:
-        # video.process_video_clips now handles the larger captions logic internally
         final_videos = video.process_video_clips(clean_video_path, ai_response, transcript_data)
         
         for vid_path, title in final_videos:
@@ -168,7 +178,7 @@ def process_video_pipeline(raw_file_path, user_id):
                     "description": desc,
                     "score": score
                 }
-                supabase.table("clips").insert(data).execute()
+                get_supabase().table("clips").insert(data).execute()
                 log_ui(f"✅ PUBLISHED: {title}")
                 if os.path.exists(vid_path): os.remove(vid_path)
             

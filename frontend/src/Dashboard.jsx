@@ -13,8 +13,17 @@ import { useNavigate } from 'react-router-dom'
 
 function cn(...inputs) { return twMerge(clsx(inputs)) }
 
-// Uses environment variable or defaults to local
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+
+// Available platforms supported by Ayrshare
+const PLATFORMS = [
+  { id: 'youtube', label: 'YouTube' },
+  { id: 'tiktok', label: 'TikTok' },
+  { id: 'instagram', label: 'Instagram' },
+  { id: 'facebook', label: 'Facebook' },
+  { id: 'linkedin', label: 'LinkedIn' },
+  { id: 'twitter', label: 'X (Twitter)' }
+]
 
 export default function Dashboard() {
   const [user, setUser] = useState(null)
@@ -27,7 +36,7 @@ export default function Dashboard() {
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [autoUpload, setAutoUpload] = useState(false)
   
-  // --- SOCIAL POSTING STATE ---
+  // Social Posting State
   const [isPosting, setIsPosting] = useState(false)
   const [selectedPlatforms, setSelectedPlatforms] = useState(['youtube', 'tiktok']) 
 
@@ -85,40 +94,39 @@ export default function Dashboard() {
 
   // --- SOCIAL MEDIA FUNCTIONS ---
   
-  // 1. Connect Account (Opens Ayrshare popup)
   const handleConnectSocials = async () => {
     if(!user) return
     try {
-        addLog("🔗 Generating connection link...")
+        addLog("🔗 Requesting connection link...")
         const formData = new FormData()
         formData.append("user_id", user.id)
         
         const res = await axios.post(`${API_URL}/social/connect`, formData)
         
-        if (res.data.url) {
-            // Open popup for user to login to TikTok/YT
-            window.open(res.data.url, '_blank', 'width=600,height=700')
-            addLog("✅ Connection window opened")
+        if (res.data.status === "success" && res.data.url) {
+            // Open the Ayrshare dashboard where user connects specific accounts
+            window.open(res.data.url, '_blank', 'width=800,height=700')
+            addLog("✅ Dashboard opened. Connect your accounts there.")
             setShowUserMenu(false)
         } else {
-            alert("Could not generate link.")
+            console.error(res.data)
+            alert("Error: " + (res.data.message || "Unknown error"))
         }
     } catch (e) {
         console.error(e)
-        alert("Error connecting socials")
+        alert("Network Error connecting socials. Check console.")
     }
   }
 
-  // 2. Post Video
   const handlePost = async () => {
     if (!selectedClip || !user) return
     if (selectedPlatforms.length === 0) {
-        alert("Please select at least one platform")
+        alert("Please select at least one platform.")
         return
     }
 
     setIsPosting(true)
-    addLog(`📤 Posting to ${selectedPlatforms.join(', ')}...`)
+    addLog(`📤 Posting to: ${selectedPlatforms.join(', ')}...`)
 
     const formData = new FormData()
     formData.append("user_id", user.id)
@@ -128,34 +136,34 @@ export default function Dashboard() {
 
     try {
         const res = await axios.post(`${API_URL}/social/post`, formData)
-        console.log(res.data)
         
         if (res.data.status === "error") {
-            // Provide helpful feedback if they haven't connected yet
-            if (res.data.message.includes("Profile key not found")) {
-                if(confirm("You haven't connected your social accounts yet. Connect now?")) {
+            // Friendly error handling
+            if (res.data.message && res.data.message.includes("Profile key not found")) {
+                if(confirm("Social accounts not connected yet. Open connection dashboard?")) {
                     handleConnectSocials()
                 }
             } else {
-                addLog(`❌ Post Failed: ${res.data.message}`)
-                alert(`Upload failed: ${res.data.message}`)
+                addLog(`❌ Upload Failed: ${res.data.message}`)
+                alert(`Upload failed: ${JSON.stringify(res.data.message)}`)
             }
         } else {
             addLog("✅ Successfully posted to socials!")
             alert("Posted successfully!")
-            setSelectedClip(null) // Close modal
+            setSelectedClip(null) 
         }
     } catch (e) {
         addLog("❌ Network Error during post")
+        console.error(e)
     }
     setIsPosting(false)
   }
 
-  const togglePlatform = (p) => {
-    if (selectedPlatforms.includes(p)) {
-        setSelectedPlatforms(prev => prev.filter(item => item !== p))
+  const togglePlatform = (pId) => {
+    if (selectedPlatforms.includes(pId)) {
+        setSelectedPlatforms(prev => prev.filter(item => item !== pId))
     } else {
-        setSelectedPlatforms(prev => [...prev, p])
+        setSelectedPlatforms(prev => [...prev, pId])
     }
   }
 
@@ -210,7 +218,6 @@ export default function Dashboard() {
 
   const uploadChunk = async (blob, id) => {
     const userId = userRef.current ? userRef.current.id : "offline-user"
-    const isAuto = autoUploadRef.current
     addLog(`🚀 Uploading chunk_${id}...`)
     
     const formData = new FormData()
@@ -247,21 +254,27 @@ export default function Dashboard() {
                 <video src={selectedClip.filename} className="max-h-[50vh] w-full object-contain" controls autoPlay />
               </div>
               
-              {/* SOCIAL MEDIA UPLOAD CONTROLS */}
+              {/* UPLOAD CONTROLS */}
               <div className="p-5 bg-zinc-900 border-t border-zinc-800">
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 block">Select Platforms</label>
+                <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider block">Post To:</label>
+                    <button onClick={handleConnectSocials} className="text-[10px] text-accent hover:underline flex items-center gap-1">
+                        <LinkIcon className="w-3 h-3"/> Manage Connections
+                    </button>
+                </div>
+                
                 <div className="flex flex-wrap gap-2 mb-4">
-                    {['youtube', 'tiktok', 'instagram', 'twitter', 'linkedin'].map(p => (
+                    {PLATFORMS.map(p => (
                         <button 
-                            key={p}
-                            onClick={() => togglePlatform(p)}
-                            className={cn("px-3 py-1.5 rounded-lg text-xs font-bold capitalize border transition-all", 
-                                selectedPlatforms.includes(p) 
+                            key={p.id}
+                            onClick={() => togglePlatform(p.id)}
+                            className={cn("px-3 py-1.5 rounded-lg text-xs font-bold transition-all border", 
+                                selectedPlatforms.includes(p.id) 
                                 ? "bg-white text-black border-white shadow-lg shadow-white/10" 
                                 : "bg-zinc-800 text-zinc-500 border-zinc-700 hover:border-zinc-500"
                             )}
                         >
-                            {p}
+                            {p.label}
                         </button>
                     ))}
                 </div>
@@ -272,9 +285,8 @@ export default function Dashboard() {
                     className="w-full bg-rose-600 text-white py-3.5 rounded-xl font-bold hover:bg-rose-500 flex justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-rose-900/20"
                 >
                     {isPosting ? <Loader2 className="w-5 h-5 animate-spin"/> : <UploadCloud className="w-5 h-5" />}
-                    {isPosting ? "Distributing..." : "Post Viral Clip"}
+                    {isPosting ? "Posting..." : "Post to Selected Platforms"}
                 </button>
-                <p className="text-center text-[10px] text-zinc-600 mt-3">Powered by DirectorFlow AI Distribution</p>
               </div>
             </motion.div>
           </motion.div>
