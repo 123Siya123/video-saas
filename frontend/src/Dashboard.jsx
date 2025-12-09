@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Camera, Play, UploadCloud, Sparkles, 
   Terminal, X, Maximize2, LogOut, User, Square, Loader2, Link as LinkIcon,
-  Youtube, Instagram, Facebook, Twitter
+  Youtube, Instagram, Twitter, Facebook
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
@@ -16,14 +16,13 @@ function cn(...inputs) { return twMerge(clsx(inputs)) }
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
 
 const PLATFORM_CONFIG = {
-    youtube: { label: "YouTube", icon: Youtube, color: "text-red-500", help: "Enable YouTube Data API v3. Add http://localhost:5173/auth/callback to Redirect URIs." },
+    youtube: { label: "YouTube", icon: Youtube, color: "text-red-500", help: "Enable YouTube Data API v3. Create OAuth Client ID (Web Application). Add Redirect URI." },
     instagram: { label: "Instagram", icon: Instagram, color: "text-pink-500", help: "Create Meta App. Add Instagram Basic Display. Add Redirect URI." },
-    twitter: { label: "Twitter (X)", icon: Twitter, color: "text-blue-400", help: "Create Project in Developer Portal. Enable OAuth 2.0." },
-    tiktok: { label: "TikTok", icon: Play, color: "text-black", help: "Requires manual approval from TikTok. Advanced users only." }
+    twitter: { label: "Twitter (X)", icon: Twitter, color: "text-blue-400", help: "Create Project in Developer Portal. Enable OAuth 2.0. Add Redirect URI." },
+    tiktok: { label: "TikTok", icon: Play, color: "text-black", help: "Requires TikTok for Developers App. Add Redirect URI." }
 }
 
 export default function Dashboard() {
-  // ... existing user/camera state ...
   const [user, setUser] = useState(null)
   const [isRecording, setIsRecording] = useState(false)
   const [logs, setLogs] = useState(["System initialized..."])
@@ -35,7 +34,7 @@ export default function Dashboard() {
   
   // Connection Wizard State
   const [showConnectModal, setShowConnectModal] = useState(false)
-  const [activeConnectTab, setActiveConnectTab] = useState('youtube') // youtube, instagram, etc
+  const [activeConnectTab, setActiveConnectTab] = useState('youtube') 
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   
@@ -56,8 +55,6 @@ export default function Dashboard() {
   // --- AUTH HANDLER ---
   useEffect(() => {
     const code = searchParams.get('code')
-    // We need to know WHICH platform we just authenticated.
-    // In a real app, use the 'state' param. For MVP, we check LocalStorage.
     const pendingPlatform = localStorage.getItem('pending_auth_platform')
 
     const completeAuth = async () => {
@@ -84,16 +81,45 @@ export default function Dashboard() {
     completeAuth()
   }, [searchParams])
 
-  // ... existing UseEffects for logs/gallery ...
-  // (Copy your existing useEffects here)
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        setUser(session.user)
+        userRef.current = session.user
+      }
+    })
 
-  // --- FUNCTIONS ---
+    const interval = setInterval(async () => {
+      try {
+        const logRes = await axios.get(`${API_URL}/logs`)
+        if (logRes.data.logs) {
+          setLogs(prev => [...new Set([...prev, ...logRes.data.logs])].slice(-50))
+        }
+        const currentUserId = userRef.current ? userRef.current.id : "offline-user"
+        const gallRes = await axios.get(`${API_URL}/gallery/${currentUserId}`)
+        if (gallRes.data) setGallery(gallRes.data)
+      } catch (e) {}
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [navigate])
+
+  useEffect(() => {
+    if (window.innerWidth >= 1024 || activeTab === 'logs') {
+        logsEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+    }
+  }, [logs, activeTab])
+
+  // --- HELPER FUNCTIONS ---
   const addLog = (msg) => setLogs(prev => [...prev, `[UI] ${msg}`])
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    navigate('/')
+  }
+
+  // --- CONNECT ACCOUNT ---
   const initConnection = async () => {
       if(!clientId || !clientSecret) return alert("Please enter keys")
-      
-      // Store platform in localstorage to know who we are connecting when we return
       localStorage.setItem('pending_auth_platform', activeConnectTab)
 
       try {
@@ -107,6 +133,7 @@ export default function Dashboard() {
       } catch(e) { alert("Error initializing auth") }
   }
 
+  // --- POST TO SOCIALS ---
   const handlePost = async () => {
       if (!selectedClip || !user) return
       setIsPosting(true)
@@ -118,7 +145,9 @@ export default function Dashboard() {
 
       try {
           const res = await axios.post(`${API_URL}/upload`, formData)
-          alert(JSON.stringify(res.data, null, 2))
+          // Simple result summary
+          const summary = Object.entries(res.data).map(([k,v]) => `${k}: ${v.status || 'error'}`).join('\n')
+          alert(summary)
           addLog("✅ Upload process finished")
       } catch(e) {
           alert("Network error")
@@ -130,7 +159,66 @@ export default function Dashboard() {
       setUploadPlatforms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])
   }
 
-  // --- RENDER ---
+  // --- CAMERA LOGIC (Fixed ReferenceError) ---
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" }, 
+        audio: true 
+      })
+      videoRef.current.srcObject = stream
+      streamRef.current = stream
+      videoRef.current.play()
+      setCameraReady(true)
+      addLog("Camera initialized")
+    } catch (err) { alert("Hardware Error: " + err.message) }
+  }
+
+  const toggleRecording = () => { isRecording ? stopRecording() : startRecording() }
+
+  const startRecording = () => {
+    if (!streamRef.current) return
+    setIsRecording(true)
+    chunkCounter.current = 0
+    addLog("🔴 Recording Started")
+    recordNextChunk()
+  }
+
+  const recordNextChunk = () => {
+    if (!streamRef.current) return
+    const recorder = new MediaRecorder(streamRef.current, { mimeType: 'video/webm' })
+    mediaRecorderRef.current = recorder
+    const chunks = []
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: 'video/webm' })
+      uploadChunk(blob, chunkCounter.current)
+      chunkCounter.current++
+      if (mediaRecorderRef.current) recordNextChunk()
+    }
+    recorder.start()
+    setTimeout(() => { if (recorder.state === 'recording') recorder.stop() }, 120000) 
+  }
+
+  const stopRecording = () => {
+    addLog("🛑 Stopping Recording...")
+    const rec = mediaRecorderRef.current
+    mediaRecorderRef.current = null 
+    if (rec && rec.state === 'recording') rec.stop()
+    setIsRecording(false)
+  }
+
+  const uploadChunk = async (blob, id) => {
+    const userId = userRef.current ? userRef.current.id : "offline-user"
+    const formData = new FormData()
+    formData.append("file", blob, `chunk_${id}.webm`)
+    formData.append("user_id", userId) 
+    try { 
+      await axios.post(`${API_URL}/upload-chunk`, formData)
+      addLog(`✅ Chunk_${id} sent`)
+    } catch (err) { console.error(err) }
+  }
+
   return (
     <div className="h-[100dvh] w-full bg-[#050505] text-zinc-300 font-sans overflow-hidden flex flex-col">
       
@@ -158,7 +246,7 @@ export default function Dashboard() {
                             <div className="bg-zinc-950 p-4 rounded-lg border border-zinc-800 text-xs space-y-2 mb-6 text-zinc-400 leading-relaxed">
                                 <p className="font-bold text-white mb-2">Instructions for {PLATFORM_CONFIG[activeConnectTab].label}:</p>
                                 <p>{PLATFORM_CONFIG[activeConnectTab].help}</p>
-                                <p className="mt-2 text-zinc-600">Redirect URI: <code className="bg-black px-1 rounded text-white select-all">{window.location.origin}/auth/callback</code></p>
+                                <p className="mt-2 text-zinc-600">Redirect URI: <br/><code className="bg-black px-1 rounded text-white select-all">{window.location.origin}/auth/callback</code></p>
                             </div>
 
                             <div className="space-y-4 mt-auto">
@@ -193,7 +281,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* NAVBAR (Unchanged - just ensure correct onClick for connect) */}
+      {/* NAVBAR */}
       <nav className="h-14 border-b border-white/10 bg-black/90 backdrop-blur-xl z-50 flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-2 font-bold text-white"><Sparkles className="w-5 h-5 text-rose-500" /> DirectorFlow</div>
         <div className="flex items-center gap-4">
@@ -212,20 +300,20 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* MAIN LAYOUT (Camera & Gallery - Unchanged) */}
+      {/* MAIN LAYOUT */}
       <main className="flex-1 flex flex-col lg:grid lg:grid-cols-12 lg:gap-6 lg:p-6 overflow-hidden">
-        {/* ... (Camera Section - Copy from previous) ... */}
+        {/* LEFT: CAMERA */}
         <div className="flex flex-col lg:col-span-7 gap-0 lg:gap-6 shrink-0 lg:shrink">
           <div className="relative bg-black lg:rounded-3xl overflow-hidden border-b lg:border border-white/10 shadow-2xl flex justify-center h-[45vh] lg:h-[65vh]">
             <div className="relative aspect-[9/16] h-full w-auto bg-black lg:rounded-lg overflow-hidden border-x border-white/10">
                 {!cameraReady && <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 z-10"><button onClick={startCamera} className="px-6 py-3 bg-white text-black rounded-full font-bold flex gap-2"><Camera className="w-5 h-5" /> Activate Camera</button></div>}
                 <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
-                <div className="absolute bottom-6 left-0 right-0 flex justify-center z-20"><button onClick={() => isRecording ? stopRecording() : startRecording()} disabled={!cameraReady} className={cn("h-20 w-20 rounded-full flex items-center justify-center border-4 shadow-xl transition-all", isRecording ? "bg-white border-white/50" : "bg-rose-600 border-white/20")}><div className={cn("transition-all duration-300", isRecording ? "w-8 h-8 bg-red-600 rounded-md" : "w-16 h-16 bg-transparent")} /></button></div>
+                <div className="absolute bottom-6 left-0 right-0 flex justify-center z-20"><button onClick={toggleRecording} disabled={!cameraReady} className={cn("h-20 w-20 rounded-full flex items-center justify-center border-4 shadow-xl transition-all", isRecording ? "bg-white border-white/50" : "bg-rose-600 border-white/20")}><div className={cn("transition-all duration-300", isRecording ? "w-8 h-8 bg-red-600 rounded-md" : "w-16 h-16 bg-transparent")} /></button></div>
             </div>
           </div>
           <div className="hidden lg:flex bg-zinc-900/50 border border-white/5 p-6 rounded-2xl items-center justify-between backdrop-blur-md">
             <div><h3 className="text-white font-medium">Neural Command</h3><p className="text-xs text-zinc-500">Auto-Director Mode</p></div>
-            <button onClick={() => isRecording ? stopRecording() : startRecording()} disabled={!cameraReady} className={cn("px-8 py-4 rounded-xl font-bold flex gap-3 shadow-lg transition-colors", isRecording ? "bg-zinc-800 text-red-400 border border-red-500/20" : "bg-rose-600 text-white")}>{isRecording ? "STOP RECORDING" : "START RECORDING"}</button>
+            <button onClick={toggleRecording} disabled={!cameraReady} className={cn("px-8 py-4 rounded-xl font-bold flex gap-3 shadow-lg transition-colors", isRecording ? "bg-zinc-800 text-red-400 border border-red-500/20" : "bg-rose-600 text-white")}>{isRecording ? "STOP RECORDING" : "START RECORDING"}</button>
           </div>
           <div className="hidden lg:flex flex-col bg-black rounded-xl border border-zinc-800 h-full overflow-hidden min-h-[150px]">
             <div className="px-4 py-2 border-b border-zinc-800 bg-zinc-900/50 flex items-center gap-2"><Terminal className="w-4 h-4 text-rose-500" /><span className="text-xs font-mono text-zinc-400">LOGS</span></div>
@@ -233,7 +321,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ... (Gallery Section - Copy from previous) ... */}
+        {/* RIGHT: GALLERY */}
         <div className="flex-1 flex flex-col lg:col-span-5 overflow-hidden lg:rounded-2xl lg:bg-zinc-900/30 lg:border border-white/5 bg-zinc-950">
           <div className="flex-1 overflow-y-auto p-4 relative space-y-3 pb-20">
               {gallery.map((clip) => (
