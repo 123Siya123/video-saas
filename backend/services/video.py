@@ -12,18 +12,31 @@ def create_caption_clip(text, duration, video_width):
     font_name = "arialbd.ttf" 
     font = None
 
+    # Initialize variables to prevent "referenced before assignment" error
+    text_width = 100
+    text_height = 50
+
     # 2. Shrink font until text fits
     while fontsize > 20:
         try:
             font = ImageFont.truetype(font_name, fontsize)
         except:
             try:
+                # Try standard arial if bold not found
                 font = ImageFont.truetype("arial.ttf", fontsize)
             except:
+                # Fallback to default PIL font if no TTF found (Linux/Render)
                 font = ImageFont.load_default()
+                
+                # Measure Text immediately for default font so variables are set
+                dummy_img = Image.new('RGB', (10, 10))
+                dummy_draw = ImageDraw.Draw(dummy_img)
+                left, top, right, bottom = dummy_draw.textbbox((0, 0), text, font=font)
+                text_width = right - left
+                text_height = bottom - top
                 break 
 
-        # Measure Text
+        # Measure Text for the current fontsize
         dummy_img = Image.new('RGB', (10, 10))
         dummy_draw = ImageDraw.Draw(dummy_img)
         left, top, right, bottom = dummy_draw.textbbox((0, 0), text, font=font)
@@ -37,6 +50,9 @@ def create_caption_clip(text, duration, video_width):
     
     # 3. Draw Image
     img_width = int(video_width)
+    # Ensure text_height is at least something to avoid crashes
+    if text_height < 10: text_height = 20
+    
     img_height = text_height + 60 # Extra padding
     img = Image.new('RGBA', (img_width, img_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -44,12 +60,12 @@ def create_caption_clip(text, duration, video_width):
     x_pos = (img_width - text_width) / 2
     y_pos = (img_height - text_height) / 2
 
-    # Outline
+    # Outline (Stroke effect)
     for x in range(-4, 5):
         for y in range(-4, 5):
             draw.text((x_pos+x, y_pos+y), text, font=font, fill="black")
 
-    # Text
+    # Main Text
     draw.text((x_pos, y_pos), text, font=font, fill="#FFFF00")
 
     img_np = np.array(img)
@@ -153,6 +169,8 @@ def process_video_clips(video_path, clips_metadata, transcript_data):
 
         except Exception as e:
             print(f"⚠️ Edit failed for clip {i}: {e}")
+            import traceback
+            traceback.print_exc()
 
     original_clip.close()
     return processed_files
