@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Camera, Play, UploadCloud, Sparkles, 
   Terminal, X, Maximize2, LogOut, User, Square, Loader2, Link as LinkIcon,
-  Youtube, Instagram, Twitter, Facebook, Calendar, HelpCircle, ExternalLink, Copy
+  Youtube, Instagram, Twitter, Facebook, Calendar, HelpCircle, ExternalLink, Copy, CheckCircle
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
@@ -16,34 +16,35 @@ function cn(...inputs) { return twMerge(clsx(inputs)) }
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
 const CALENDLY_URL = import.meta.env.VITE_CALENDLY_URL || "https://calendly.com/your-username/30min"; 
 
-// --- DETAILED PLATFORM MANUALS ---
+// --- CLEANED MANUALS (No Numbers in Text) ---
 const PLATFORM_CONFIG = {
     youtube: { 
         label: "YouTube", 
         icon: Youtube, 
         color: "text-red-500",
-        portalUrl: "https://console.cloud.google.com/apis/credentials/consent",
+        portalName: "Google Cloud Console",
+        portalUrl: "https://console.cloud.google.com/apis/dashboard",
         steps: [
-            "1. Go to Google Cloud Console -> 'OAuth Consent Screen'.",
-            "2. Set 'User Type' to 'External'.",
-            "3. IMPORTANT: Under 'Test Users', click 'Add Users' and enter YOUR email address.",
-            "4. Go to 'APIs & Services' -> 'Library' -> Enable 'YouTube Data API v3'.",
-            "5. Go to 'Credentials' -> 'Create Credentials' -> 'OAuth Client ID'.",
-            "6. Application Type: 'Web Application'.",
-            "7. Add Redirect URI: " + window.location.origin + "/auth/callback",
-            "8. Copy Client ID and Secret."
+            "Create a new Project in the console.",
+            "In 'APIs & Services' -> 'Library', enable 'YouTube Data API v3'.",
+            "Go to 'OAuth Consent Screen' -> Select 'External'.",
+            "IMPORTANT: Add your email to 'Test Users' (otherwise you get Error 403).",
+            "Go to 'Credentials' -> 'Create Credentials' -> 'OAuth Client ID'.",
+            "Select 'Web Application'.",
+            "Add the Redirect URI shown below.",
+            "Copy the Client ID and Client Secret."
         ]
     },
     instagram: { 
         label: "Instagram", 
         icon: Instagram, 
         color: "text-pink-500", 
+        portalName: "Meta for Developers",
         portalUrl: "https://developers.facebook.com/apps/",
         steps: [
-            "Go to Meta for Developers -> 'My Apps' -> 'Create App'.",
-            "Select 'Business' type (not Consumer).",
+            "Go to 'My Apps' -> 'Create App' -> Select 'Business'.",
             "On the Dashboard, scroll to 'Instagram Graph API' and click 'Set Up'.",
-            "Go to 'Settings' -> 'Basic' on the left sidebar.",
+            "Go to 'Settings' -> 'Basic'.",
             "Scroll down to 'Add Platform' -> Select 'Website'.",
             "Enter your website URL (or localhost) in Site URL.",
             "Copy App ID (Client ID) and App Secret (Client Secret)."
@@ -53,14 +54,15 @@ const PLATFORM_CONFIG = {
         label: "Twitter (X)", 
         icon: Twitter, 
         color: "text-blue-400", 
+        portalName: "X Developer Portal",
         portalUrl: "https://developer.twitter.com/en/portal/dashboard",
         steps: [
-            "Go to the X Developer Portal and create a 'Free' Project.",
-            "Navigate to 'Keys and tokens' for your App.",
+            "Create a 'Free' Project.",
+            "Navigate to 'Keys and tokens'.",
             "Click 'Set up' under 'User authentication settings'.",
             "App Permissions: Select 'Read and Write'.",
-            "Type of App: Select 'Web App, Automated App or Bot'.",
-            "Enter the Redirect URI below in 'Callback URI / Redirect URL'.",
+            "Type of App: Select 'Web App'.",
+            "Enter the Redirect URI below in 'Callback URI'.",
             "Enter your website URL.",
             "Save and copy the 'OAuth 2.0 Client ID' and 'Client Secret'."
         ]
@@ -69,13 +71,14 @@ const PLATFORM_CONFIG = {
         label: "TikTok", 
         icon: Play, 
         color: "text-black", 
+        portalName: "TikTok for Developers",
         portalUrl: "https://developers.tiktok.com/",
         steps: [
-            "Go to TikTok for Developers and create an App.",
+            "Create a Developer App.",
             "In 'Products', add 'Video Kit' and 'Login Kit'.",
             "Go to 'Manage' -> 'Redirect URIs' and add the URI below.",
             "Note: TikTok requires Manual App Review to allow uploads.",
-            "Once approved, copy the Client Key and Client Secret from 'Basic Information'."
+            "Once approved, copy the Client Key and Client Secret."
         ]
     }
 }
@@ -90,7 +93,8 @@ export default function Dashboard() {
   const [selectedClip, setSelectedClip] = useState(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
   
-  // Connection Wizard State
+  // Connection State
+  const [connectedPlatforms, setConnectedPlatforms] = useState([]) // List of strings ['youtube', 'twitter']
   const [showConnectModal, setShowConnectModal] = useState(false)
   const [showCalendly, setShowCalendly] = useState(false)
   const [activeConnectTab, setActiveConnectTab] = useState('youtube') 
@@ -99,7 +103,9 @@ export default function Dashboard() {
   
   // Upload State
   const [isPosting, setIsPosting] = useState(false)
-  const [uploadPlatforms, setUploadPlatforms] = useState(['youtube'])
+  const [uploadPlatforms, setUploadPlatforms] = useState([]) // Selected for upload
+  const [postTitle, setPostTitle] = useState("")
+  const [postCaption, setPostCaption] = useState("")
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -111,7 +117,20 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  // --- AUTH HANDLER ---
+  // --- 1. FETCH STATUS ON LOAD ---
+  const fetchConnections = async (userId) => {
+      if(!userId) return
+      try {
+          const res = await axios.get(`${API_URL}/auth/status/${userId}`)
+          if(res.data.connected) {
+              setConnectedPlatforms(res.data.connected)
+              // Auto-select connected platforms for upload
+              setUploadPlatforms(res.data.connected)
+          }
+      } catch(e) { console.error("Status check failed", e) }
+  }
+
+  // --- 2. AUTH CALLBACK HANDLER ---
   useEffect(() => {
     const code = searchParams.get('code')
     const pendingPlatform = localStorage.getItem('pending_auth_platform')
@@ -119,7 +138,9 @@ export default function Dashboard() {
     const completeAuth = async () => {
         const { data: { session } } = await supabase.auth.getSession()
         if (code && session && pendingPlatform) {
+            // Clean URL
             window.history.replaceState({}, document.title, "/dashboard")
+            
             addLog(`🔄 Finalizing ${pendingPlatform} Connection...`)
             try {
                 const res = await axios.post(`${API_URL}/auth/callback`, {
@@ -128,9 +149,12 @@ export default function Dashboard() {
                     platform: pendingPlatform
                 })
                 if(res.data.status === 'success') {
-                    alert(`${pendingPlatform} Connected!`)
+                    alert(`${pendingPlatform} Connected Successfully!`)
                     addLog(`✅ ${pendingPlatform} Connected`)
                     localStorage.removeItem('pending_auth_platform')
+                    // Refresh connections list
+                    fetchConnections(session.user.id)
+                    setShowConnectModal(false) 
                 } else {
                     alert("Connection Failed: " + JSON.stringify(res.data))
                 }
@@ -145,6 +169,7 @@ export default function Dashboard() {
       if (session) {
         setUser(session.user)
         userRef.current = session.user
+        fetchConnections(session.user.id)
       }
     })
 
@@ -168,13 +193,9 @@ export default function Dashboard() {
     }
   }, [logs, activeTab])
 
-  // --- HELPER FUNCTIONS ---
+  // --- HELPERS ---
   const addLog = (msg) => setLogs(prev => [...prev, `[UI] ${msg}`])
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut()
-    navigate('/')
-  }
+  const handleLogout = async () => { await supabase.auth.signOut(); navigate('/') }
 
   // --- CONNECT ACCOUNT ---
   const initConnection = async () => {
@@ -192,19 +213,22 @@ export default function Dashboard() {
       } catch(e) { alert("Error initializing auth") }
   }
 
+  // --- POST TO SOCIALS ---
   const handlePost = async () => {
       if (!selectedClip || !user) return
+      if (uploadPlatforms.length === 0) return alert("Select at least one platform")
+      
       setIsPosting(true)
       const formData = new FormData()
       formData.append("user_id", user.id)
-      formData.append("video_filename", selectedClip.filename) 
-      formData.append("caption", selectedClip.description)
+      formData.append("video_filename", selectedClip.filename)
+      formData.append("caption", postCaption || selectedClip.description) // Use user caption or default
       formData.append("platforms", uploadPlatforms.join(','))
 
       try {
           const res = await axios.post(`${API_URL}/upload`, formData)
-          const summary = Object.entries(res.data).map(([k,v]) => `${k}: ${v.status || 'error'}`).join('\n')
-          alert(summary)
+          const summary = Object.entries(res.data).map(([k,v]) => `${k}: ${v.status || v.error}`).join('\n')
+          alert("Upload Results:\n" + summary)
           addLog("✅ Upload process finished")
       } catch(e) {
           alert("Network error")
@@ -213,20 +237,32 @@ export default function Dashboard() {
   }
 
   const toggleUploadPlatform = (p) => {
+      // Don't allow selecting disconnected platforms
+      if (!connectedPlatforms.includes(p)) {
+          if(confirm(`${PLATFORM_CONFIG[p].label} is not connected. Connect now?`)) {
+              setSelectedClip(null)
+              setActiveConnectTab(p)
+              setShowConnectModal(true)
+          }
+          return
+      }
       setUploadPlatforms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])
   }
 
+  const openClipModal = (clip) => {
+      setSelectedClip(clip)
+      setPostTitle(clip.title)
+      setPostCaption(`${clip.title}\n\n${clip.description}\n\n#viral #fyp`)
+  }
+
+  // --- CAMERA LOGIC ---
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" }, 
-        audio: true 
-      })
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" }, audio: true })
       videoRef.current.srcObject = stream
       streamRef.current = stream
       videoRef.current.play()
       setCameraReady(true)
-      addLog("Camera initialized")
     } catch (err) { alert("Hardware Error: " + err.message) }
   }
 
@@ -278,7 +314,7 @@ export default function Dashboard() {
   return (
     <div className="h-[100dvh] w-full bg-[#050505] text-zinc-300 font-sans overflow-hidden flex flex-col">
       
-      {/* CALENDLY EMBED MODAL */}
+      {/* CALENDLY */}
       <AnimatePresence>
         {showCalendly && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[150] flex items-center justify-center bg-black/95 p-4">
@@ -306,8 +342,10 @@ export default function Dashboard() {
                         <div className="w-1/3 flex flex-col gap-2 border-r border-zinc-800 pr-6 overflow-y-auto">
                             {Object.entries(PLATFORM_CONFIG).map(([key, conf]) => (
                                 <button key={key} onClick={() => { setActiveConnectTab(key); setClientId(''); setClientSecret(''); }} 
-                                    className={cn("w-full text-left px-3 py-3 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors", activeConnectTab === key ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:bg-zinc-800 hover:text-white")}>
-                                    <conf.icon className={cn("w-4 h-4", activeConnectTab !== key && conf.color)} /> {conf.label}
+                                    className={cn("w-full text-left px-3 py-3 rounded-lg text-sm font-bold flex items-center justify-between transition-colors", 
+                                    activeConnectTab === key ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:bg-zinc-800 hover:text-white")}>
+                                    <div className="flex items-center gap-2"><conf.icon className={cn("w-4 h-4", activeConnectTab !== key && conf.color)} /> {conf.label}</div>
+                                    {connectedPlatforms.includes(key) && <CheckCircle className="w-4 h-4 text-green-500" />}
                                 </button>
                             ))}
                             
@@ -322,22 +360,21 @@ export default function Dashboard() {
                         {/* Content */}
                         <div className="w-2/3 flex flex-col overflow-y-auto pr-2">
                             <div className="bg-zinc-950 p-5 rounded-xl border border-zinc-800 text-sm space-y-4 mb-6 text-zinc-400 leading-relaxed shadow-inner">
-                                <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
-                                    <span className="text-white font-bold flex items-center gap-2">
-                                        <HelpCircle className="w-4 h-4 text-rose-500" /> Instructions for {PLATFORM_CONFIG[activeConnectTab].label}
-                                    </span>
-                                    <a href={PLATFORM_CONFIG[activeConnectTab].portalUrl} target="_blank" rel="noreferrer" className="text-xs text-rose-400 hover:underline flex items-center gap-1">
-                                        Open Developer Portal <ExternalLink className="w-3 h-3" />
-                                    </a>
+                                <div className="flex items-center gap-2 text-white font-bold pb-2 border-b border-zinc-900">
+                                    <HelpCircle className="w-4 h-4 text-rose-500" /> Instructions for {PLATFORM_CONFIG[activeConnectTab].label}
                                 </div>
                                 
-                                <ul className="list-decimal list-inside space-y-2 text-xs">
-                                    {PLATFORM_CONFIG[activeConnectTab].steps.map((step, i) => (
-                                        <li key={i} className="pl-1 marker:text-zinc-600">{step}</li>
-                                    ))}
-                                </ul>
+                                <p className="text-zinc-300">
+                                    Go to: <a href={PLATFORM_CONFIG[activeConnectTab].portalUrl} target="_blank" rel="noreferrer" className="text-rose-400 hover:underline font-bold ml-1">{PLATFORM_CONFIG[activeConnectTab].portalName} <ExternalLink className="w-3 h-3 inline" /></a>
+                                </p>
 
-                                <div className="pt-2 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50">
+                                <ol className="list-decimal list-inside space-y-3 text-xs ml-1">
+                                    {PLATFORM_CONFIG[activeConnectTab].steps.map((step, i) => (
+                                        <li key={i} className="pl-1 marker:text-zinc-500 marker:font-bold">{step}</li>
+                                    ))}
+                                </ol>
+
+                                <div className="pt-2 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50 mt-4">
                                     <p className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Redirect URI to Copy:</p>
                                     <div className="flex items-center gap-2">
                                         <code className="bg-black px-2 py-1.5 rounded border border-zinc-800 text-green-400 select-all block w-full text-xs font-mono truncate">
@@ -353,7 +390,9 @@ export default function Dashboard() {
                             <div className="space-y-4 mt-auto pb-2">
                                 <div><label className="text-xs font-bold uppercase text-zinc-500 mb-1.5 block">Client ID</label><input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm focus:border-rose-500 outline-none transition-colors" placeholder={`Paste ${PLATFORM_CONFIG[activeConnectTab].label} Client ID`} /></div>
                                 <div><label className="text-xs font-bold uppercase text-zinc-500 mb-1.5 block">Client Secret</label><input value={clientSecret} onChange={e => setClientSecret(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm focus:border-rose-500 outline-none transition-colors" type="password" placeholder="Paste Client Secret" /></div>
-                                <button onClick={initConnection} className="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:bg-zinc-200 transition-colors shadow-lg mt-2">Authenticate & Connect</button>
+                                <button onClick={initConnection} className="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:bg-zinc-200 transition-colors shadow-lg mt-2">
+                                    {connectedPlatforms.includes(activeConnectTab) ? "Reconnect Account" : "Authenticate & Connect"}
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -368,14 +407,44 @@ export default function Dashboard() {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 backdrop-blur-md p-4" onClick={() => setSelectedClip(null)}>
             <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-zinc-900 border border-zinc-700 rounded-2xl overflow-hidden max-h-[90vh] max-w-lg w-full shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-4 border-b border-zinc-800"><h3 className="text-white font-bold">{selectedClip.title}</h3><button onClick={() => setSelectedClip(null)}><X className="w-5 h-5" /></button></div>
-              <div className="relative bg-black flex-1 flex items-center justify-center"><video src={selectedClip.filename} className="max-h-[50vh] w-full object-contain" controls autoPlay /></div>
-              <div className="p-5 bg-zinc-900 border-t border-zinc-800 space-y-4">
-                <div className="flex flex-wrap gap-2">
-                    {Object.keys(PLATFORM_CONFIG).map(p => (
-                        <button key={p} onClick={() => toggleUploadPlatform(p)} className={cn("px-3 py-1 rounded-full text-xs font-bold border capitalize transition-colors", uploadPlatforms.includes(p) ? "bg-white text-black border-white" : "bg-zinc-800 text-zinc-500 border-zinc-700 hover:border-zinc-500")}>{p}</button>
-                    ))}
+              <div className="relative bg-black h-64 flex items-center justify-center"><video src={selectedClip.filename} className="h-full w-full object-contain" controls autoPlay /></div>
+              
+              <div className="p-5 bg-zinc-900 border-t border-zinc-800 flex-1 overflow-y-auto space-y-4">
+                {/* Inputs */}
+                <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Title</label>
+                    <input className="w-full bg-black border border-zinc-700 rounded p-2 text-white text-sm" value={postTitle} onChange={e => setPostTitle(e.target.value)} />
                 </div>
-                <button onClick={handlePost} disabled={isPosting} className="w-full bg-rose-600 text-white py-3 rounded-xl font-bold hover:bg-rose-500 flex justify-center gap-2">{isPosting ? <Loader2 className="animate-spin" /> : <UploadCloud />} Post to Selected</button>
+                <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Caption / Description</label>
+                    <textarea className="w-full bg-black border border-zinc-700 rounded p-2 text-white text-sm h-24 resize-none" value={postCaption} onChange={e => setPostCaption(e.target.value)} />
+                </div>
+
+                {/* Platform Selector */}
+                <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Publish To</label>
+                    <div className="flex flex-wrap gap-2">
+                        {Object.keys(PLATFORM_CONFIG).map(p => {
+                            const isConnected = connectedPlatforms.includes(p);
+                            const isSelected = uploadPlatforms.includes(p);
+                            return (
+                                <button key={p} onClick={() => toggleUploadPlatform(p)} 
+                                    className={cn("px-3 py-1.5 rounded-lg text-xs font-bold border capitalize flex items-center gap-2 transition-all", 
+                                    !isConnected ? "opacity-50 border-zinc-800 bg-zinc-900 text-zinc-600 grayscale" : 
+                                    isSelected ? "bg-white text-black border-white shadow-lg" : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:border-zinc-500")}>
+                                    {/* Icon */}
+                                    {p === 'youtube' && <Youtube className="w-3 h-3" />}
+                                    {p === 'instagram' && <Instagram className="w-3 h-3" />}
+                                    {p === 'twitter' && <Twitter className="w-3 h-3" />}
+                                    {p === 'tiktok' && <Play className="w-3 h-3" />}
+                                    {p}
+                                </button>
+                            )
+                        })}
+                    </div>
+                </div>
+
+                <button onClick={handlePost} disabled={isPosting} className="w-full bg-rose-600 text-white py-3 rounded-xl font-bold hover:bg-rose-500 flex justify-center gap-2 mt-2">{isPosting ? <Loader2 className="animate-spin" /> : <UploadCloud />} Post to Selected</button>
               </div>
             </motion.div>
           </motion.div>
@@ -426,7 +495,7 @@ export default function Dashboard() {
         <div className="flex-1 flex flex-col lg:col-span-5 overflow-hidden lg:rounded-2xl lg:bg-zinc-900/30 lg:border border-white/5 bg-zinc-950">
           <div className="flex-1 overflow-y-auto p-4 relative space-y-3 pb-20">
               {gallery.map((clip) => (
-                <div key={clip.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden flex h-24 cursor-pointer hover:border-zinc-600 transition-colors" onClick={() => setSelectedClip(clip)}>
+                <div key={clip.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden flex h-24 cursor-pointer hover:border-zinc-600 transition-colors" onClick={() => openClipModal(clip)}>
                     <div className="w-24 bg-black relative shrink-0"><video src={clip.filename} className="w-full h-full object-cover opacity-80" /><div className="absolute inset-0 flex items-center justify-center"><Play className="w-4 h-4 text-white" /></div></div>
                     <div className="flex-1 p-3"><h3 className="text-sm font-bold text-white line-clamp-1">{clip.title}</h3><span className="text-[10px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded">{clip.score}/10</span></div>
                 </div>

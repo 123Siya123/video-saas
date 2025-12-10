@@ -42,7 +42,7 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://video-saas-1.onrender.com",
-    # Add your actual frontend domain here once deployed
+    "https://video-saas.onrender.com"
 ]
 
 app.add_middleware(
@@ -103,6 +103,21 @@ class AuthCallback(BaseModel):
     code: str
     platform: str
 
+@app.get("/auth/status/{user_id}")
+def get_auth_status(user_id: str):
+    """Returns a list of connected platforms for the user"""
+    try:
+        db = get_supabase()
+        # Fetch only the 'platform' column for this user
+        res = db.table("platforms").select("platform").eq("user_id", user_id).execute()
+        
+        # Convert list of dicts [{'platform': 'youtube'}] -> ['youtube']
+        connected = [row['platform'] for row in res.data]
+        return {"connected": connected}
+    except Exception as e:
+        print(f"Status Error: {e}")
+        return {"connected": []}
+
 @app.post("/auth/init")
 def auth_init(data: AuthInit):
     """
@@ -161,14 +176,10 @@ def upload_content(
     for p in platform_list:
         log_ui(f"🚀 Uploading to {p}...")
         
-        # Instagram requires a Public URL, YouTube requires a Local File
-        # social.py handles this distinction, but we pass both just in case or handle inside main logic
-        # For simplicity here: we pass the logic to social.py which decides.
-        # But wait, Instagram needs the URL. If we downloaded it, we might have the original URL in `video_filename`
-        
         path_to_pass = local_path
+        # Instagram API requires a Public URL, not a local file
         if p == 'instagram' and "http" in video_filename:
-            path_to_pass = video_filename # Pass the URL
+            path_to_pass = video_filename 
         
         try:
             res = social.upload_video(user_id, p, path_to_pass, caption, caption)
@@ -258,7 +269,6 @@ def process_video_pipeline(raw_file_path, user_id):
 
     # 4. Edit & Save
     try:
-        # Note: process_video_clips now handles dynamic font sizing
         final_videos = video.process_video_clips(clean_video_path, ai_response, transcript_data)
         
         for vid_path, title in final_videos:
@@ -268,12 +278,10 @@ def process_video_pipeline(raw_file_path, user_id):
             public_url = upload_to_supabase_storage(vid_path, local_filename)
             
             if public_url:
-                # Find metadata for this specific clip
                 clip_meta = next((c for c in clips_found if c['title'] == title), None)
                 score = clip_meta['score'] if clip_meta else 0
                 desc = clip_meta.get('viral_description', "Auto-generated clip")
 
-                # Save to Database
                 data = {
                     "user_id": user_id,
                     "filename": public_url,
@@ -284,7 +292,6 @@ def process_video_pipeline(raw_file_path, user_id):
                 get_supabase().table("clips").insert(data).execute()
                 log_ui(f"✅ PUBLISHED: {title}")
                 
-                # Cleanup local processed clip
                 if os.path.exists(vid_path): os.remove(vid_path)
             
     except Exception as e:
@@ -315,6 +322,5 @@ async def upload_chunk(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    # Offload processing to background so UI doesn't hang
     background_tasks.add_task(process_video_pipeline, file_path, user_id)
     return {"status": "received"}
