@@ -13,7 +13,8 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Change for production
+# IMPORTANT: This must match EXACTLY what is in your Google/Meta/Twitter Console
+# Change this to your actual production URL
 REDIRECT_URI = "https://video-saas-1.onrender.com/auth/callback" 
 
 # --- PLATFORM CONFIGS ---
@@ -24,8 +25,8 @@ CONFIG = {
         'token_url': "https://oauth2.googleapis.com/token"
     },
     'instagram': {
-        # Permissions to upload to IG Business accounts
-        'scope': ['instagram_basic', 'instagram_content_publish', 'pages_show_list', 'pages_read_engagement'],
+        # Permissions to upload to IG Business accounts via Facebook Login
+        'scope': ['instagram_basic', 'instagram_content_publish', 'pages_show_list', 'pages_read_engagement', 'business_management'],
         'auth_url': "https://www.facebook.com/v18.0/dialog/oauth",
         'token_url': "https://graph.facebook.com/v18.0/oauth/access_token"
     },
@@ -42,7 +43,7 @@ CONFIG = {
 }
 
 def get_auth_url(user_id, platform, client_id, client_secret):
-    """Generates the Login URL for the specific platform"""
+    """Generates the Login URL for the specific platform and saves temp keys"""
     
     # Save keys temporarily to DB so we have them when user returns
     data = { "user_id": user_id, "platform": platform, "client_id": client_id, "client_secret": client_secret }
@@ -77,7 +78,7 @@ def exchange_code_for_token(user_id, code, platform):
         # 1. Retrieve Client ID/Secret from DB
         res = supabase.table("platforms").select("*").eq("user_id", user_id).eq("platform", platform).single().execute()
         creds = res.data
-        if not creds: return {"error": "Credentials not found"}
+        if not creds: return {"error": "Credentials not found. Please try connecting again."}
 
         token_data = {}
 
@@ -103,6 +104,10 @@ def exchange_code_for_token(user_id, code, platform):
             }
             r = requests.get(CONFIG['instagram']['token_url'], params=params)
             data = r.json()
+            
+            if 'error' in data:
+                return {"error": f"FB Token Error: {data['error']['message']}"}
+
             token_data = {"access_token": data.get('access_token'), "expires_at": time.time() + data.get('expires_in', 0)}
             
             # Instagram needs a "Long Lived Token" immediately
@@ -152,10 +157,13 @@ def upload_video(user_id, platform, video_path_or_url, title, description):
     elif platform == 'twitter':
         return _upload_twitter(creds, video_path_or_url, title)
     
-    return {"error": "Platform upload not implemented"}
+    return {"error": f"Platform {platform} upload not implemented yet"}
 
 def _upload_youtube(creds, video_path, title, description):
     # Requires local file
+    if not os.path.exists(video_path):
+        return {"error": "YouTube upload requires a local file, path invalid."}
+
     import google.oauth2.credentials
     credentials = google.oauth2.credentials.Credentials(
         token=creds['access_token'],
@@ -164,64 +172,81 @@ def _upload_youtube(creds, video_path, title, description):
         client_id=creds['client_id'],
         client_secret=creds['client_secret']
     )
-    youtube = googleapiclient.discovery.build("youtube", "v3", credentials=credentials)
-    request = youtube.videos().insert(
-        part="snippet,status",
-        body={
-            "snippet": {"title": title, "description": description, "tags": ["shorts"], "categoryId": "22"},
-            "status": {"privacyStatus": "private"}
-        },
-        media_body=googleapiclient.http.MediaFileUpload(video_path)
-    )
-    response = request.execute()
-    return {"status": "success", "id": response.get('id')}
+    
+    try:
+        youtube = googleapiclient.discovery.build("youtube", "v3", credentials=credentials)
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body={
+                "snippet": {"title": title, "description": description, "tags": ["shorts"], "categoryId": "22"},
+                "status": {"privacyStatus": "private"}
+            },
+            media_body=googleapiclient.http.MediaFileUpload(video_path)
+        )
+        response = request.execute()
+        return {"status": "success", "id": response.get('id')}
+    except Exception as e:
+        return {"error": str(e)}
 
 def _upload_instagram(creds, video_url, caption):
     # 1. Get Facebook Page ID linked to Instagram
     token = creds['access_token']
     base = "https://graph.facebook.com/v18.0"
     
-    # Get Pages
-    r = requests.get(f"{base}/me/accounts?access_token={token}")
-    pages = r.json().get('data', [])
-    if not pages: return {"error": "No Facebook Pages found"}
-    
-    # Find IG Business Account linked to first page
-    page_id = pages[0]['id']
-    r_ig = requests.get(f"{base}/{page_id}?fields=instagram_business_account&access_token={token}")
-    ig_acc = r_ig.json().get('instagram_business_account')
-    
-    if not ig_acc: return {"error": "No Instagram Business Account linked to this Page"}
-    ig_id = ig_acc['id']
+    try:
+        # Get Pages
+        r = requests.get(f"{base}/me/accounts?access_token={token}")
+        pages = r.json().get('data', [])
+        if not pages: return {"error": "No Facebook Pages found. Ensure you connected a Page."}
+        
+        # Find IG Business Account linked to first page (Naive implementation)
+        # Better: iterate pages to find one with IG connected
+        page_id = None
+        ig_id = None
+        
+        for p in pages:
+            r_ig = requests.get(f"{base}/{p['id']}?fields=instagram_business_account&access_token={token}")
+            ig_acc = r_ig.json().get('instagram_business_account')
+            if ig_acc:
+                page_id = p['id']
+                ig_id = ig_acc['id']
+                break
+        
+        if not ig_id: return {"error": "No Instagram Business Account linked to your Facebook Pages"}
 
-    # 2. Create Media Container
-    # Instagram requires a PUBLIC URL for video uploads via API
-    container_payload = {
-        'media_type': 'REELS',
-        'video_url': video_url,
-        'caption': caption,
-        'access_token': token
-    }
-    r_cont = requests.post(f"{base}/{ig_id}/media", params=container_payload)
-    container_id = r_cont.json().get('id')
-    
-    if not container_id: return {"error": "Failed to create IG container", "details": r_cont.json()}
+        # 2. Create Media Container
+        # Instagram requires a PUBLIC URL for video uploads via API
+        container_payload = {
+            'media_type': 'REELS',
+            'video_url': video_url,
+            'caption': caption,
+            'access_token': token
+        }
+        r_cont = requests.post(f"{base}/{ig_id}/media", params=container_payload)
+        container_data = r_cont.json()
+        container_id = container_data.get('id')
+        
+        if not container_id: return {"error": "Failed to create IG container", "details": container_data}
 
-    # 3. Wait for processing (Naive wait)
-    time.sleep(10) # In prod, implement polling status
+        # 3. Wait for processing (Naive wait)
+        # In production, you should poll the container status until 'FINISHED'
+        time.sleep(15) 
 
-    # 4. Publish
-    r_pub = requests.post(f"{base}/{ig_id}/media_publish", params={
-        'creation_id': container_id,
-        'access_token': token
-    })
-    
-    return {"status": "success", "details": r_pub.json()}
+        # 4. Publish
+        r_pub = requests.post(f"{base}/{ig_id}/media_publish", params={
+            'creation_id': container_id,
+            'access_token': token
+        })
+        
+        pub_data = r_pub.json()
+        if 'id' in pub_data:
+            return {"status": "success", "details": pub_data}
+        return {"error": "Failed to publish", "details": pub_data}
+
+    except Exception as e:
+        return {"error": str(e)}
 
 def _upload_twitter(creds, video_path, text):
-    # Twitter V2 doesn't support video upload cleanly yet, using V1.1 for media
-    # NOTE: This requires requests_oauthlib
-    from requests_oauthlib import OAuth1Session # If using v1 user creds
-    # However, we used OAuth2. Standard Twitter API v2 Media Upload is complex.
-    # For MVP, this serves as a placeholder or requires 'tweepy' library for ease.
+    # Twitter V2 doesn't support video upload cleanly yet without Chunked Upload (Complex)
+    # This is a placeholder as Twitter Free API usually doesn't allow media upload
     return {"error": "Twitter Upload requires complex chunking. Recommend using 'tweepy' library internally."}
