@@ -36,7 +36,7 @@ function LandingPage() {
   )
 }
 
-// --- AUTH PAGE ---
+// --- AUTH PAGE (UPDATED) ---
 function AuthPage() {
   const [isSignUp, setIsSignUp] = useState(false)
   const [email, setEmail] = useState('')
@@ -46,9 +46,19 @@ function AuthPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
+    // 1. Check if already logged in
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) navigate('/dashboard')
     })
+
+    // 2. LISTEN for the Google Login Event (This fixes the redirect loop)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' || session) {
+            navigate('/dashboard')
+        }
+    })
+
+    return () => subscription.unsubscribe()
   }, [navigate])
 
   const handleAuth = async (e) => {
@@ -88,9 +98,12 @@ function AuthPage() {
   }
 
   const handleGoogleLogin = async () => {
+    // Ensure we redirect specifically to dashboard
     await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: window.location.origin + '/dashboard' },
+      options: { 
+          redirectTo: window.location.origin + '/dashboard' 
+      },
     })
   }
 
@@ -124,15 +137,14 @@ function AuthCallback() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // 1. Get the code from URL
     const code = searchParams.get('code');
-    const state = searchParams.get('state'); // (Optional, usually platform name)
+    const state = searchParams.get('state'); 
     
-    // 2. Redirect to Dashboard with these params so Dashboard.jsx can process them
+    // We send params to dashboard so our logic in Dashboard.jsx can handle the API keys logic
     if (code) {
-        // We use 'replace' to prevent going back to this blank page
         navigate(`/dashboard?code=${code}&state=${state || ''}`, { replace: true });
     } else {
+        // If just a regular auth redirect (login), just go to dashboard
         navigate('/dashboard');
     }
   }, [navigate, searchParams]);
@@ -140,7 +152,7 @@ function AuthCallback() {
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center text-white space-y-4">
       <Loader2 className="w-10 h-10 animate-spin text-rose-500" />
-      <p className="text-zinc-400 font-mono">Verifying Social Connection...</p>
+      <p className="text-zinc-400 font-mono">Verifying Connection...</p>
     </div>
   );
 }
@@ -152,10 +164,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<AuthPage />} />
-        
-        {/* THIS WAS MISSING BEFORE - IT FIXES THE DARK SCREEN */}
         <Route path="/auth/callback" element={<AuthCallback />} />
-        
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
       </Routes>
     </Router>
