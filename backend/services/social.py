@@ -167,7 +167,7 @@ def _upload_youtube(creds, video_path, title, description):
         return {"error": "YouTube upload requires a local file, path invalid."}
 
     import google.oauth2.credentials
-    from googleapiclient.errors import HttpError # Import this
+    from googleapiclient.errors import HttpError
 
     credentials = google.oauth2.credentials.Credentials(
         token=creds['access_token'],
@@ -182,25 +182,32 @@ def _upload_youtube(creds, video_path, title, description):
         request = youtube.videos().insert(
             part="snippet,status",
             body={
-                "snippet": {"title": title, "description": description, "tags": ["shorts"], "categoryId": "22"},
-                "status": {"privacyStatus": "private"}
+                "snippet": {
+                    "title": title, 
+                    "description": description, 
+                    "tags": ["shorts", "viral", "directorflow"], 
+                    "categoryId": "22"
+                },
+                "status": {
+                    "privacyStatus": "public", # <--- CHANGED FROM PRIVATE TO PUBLIC
+                    "selfDeclaredMadeForKids": False
+                }
             },
             media_body=googleapiclient.http.MediaFileUpload(video_path)
         )
         response = request.execute()
         return {"status": "success", "id": response.get('id')}
+        
     except HttpError as e:
-        # Better error parsing
         reason = e.error_details[0].get('reason') if e.error_details else "Unknown"
         message = e.error_details[0].get('message') if e.error_details else str(e)
         
         if reason == 'accessNotConfigured':
-            return {"error": "YouTube API is not enabled. Go to Google Cloud Console -> Library -> Enable 'YouTube Data API v3'."}
+            return {"error": "YouTube API not enabled in Google Cloud."}
         elif reason == 'uploadLimitExceeded':
-            return {"error": "YouTube Daily Upload Limit reached."}
+            return {"error": "YouTube Daily Limit reached."}
             
-        print(f"YouTube Upload Error: {e}")
-        return {"error": f"YouTube Error: {message}"}
+        return {"error": f"YouTube API Error: {message}"}
     except Exception as e:
         return {"error": str(e)}
 
