@@ -9,16 +9,19 @@ export default function ProtectedRoute({ children }) {
   const location = useLocation()
 
   useEffect(() => {
-    // 1. Check active session
+    // 1. Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
-      setLoading(false)
+      // Only set loading to false if we actually have a session, 
+      // otherwise wait for the onAuthStateChange event to confirm
+      if (session) setLoading(false)
     })
 
-    // 2. Listen for changes (e.g. token expiry)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // 2. Listen for auth changes (This handles the OAuth redirect magic)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
-      setLoading(false)
+      // We stop loading once Supabase tells us the auth state is settled
+      setLoading(false) 
     })
 
     return () => subscription.unsubscribe()
@@ -32,7 +35,6 @@ export default function ProtectedRoute({ children }) {
     )
   }
 
-  // If no session, redirect to login, but remember where they were trying to go
   if (!session) {
     return <Navigate to="/login" state={{ from: location }} replace />
   }

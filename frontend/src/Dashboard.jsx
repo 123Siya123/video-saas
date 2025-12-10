@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Camera, Play, UploadCloud, Sparkles, 
   Terminal, X, Maximize2, LogOut, User, Square, Loader2, Link as LinkIcon,
-  Youtube, Instagram, Twitter, Facebook, Calendar, HelpCircle, ExternalLink, Copy, CheckCircle, FileText, Film, Trash2
+  Youtube, Instagram, Twitter, Facebook, Calendar, HelpCircle, ExternalLink, Copy, CheckCircle, FileText, Film, Trash2,
+  RefreshCw 
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
@@ -29,6 +30,7 @@ export default function Dashboard() {
   const [logs, setLogs] = useState(["System initialized..."])
   const [gallery, setGallery] = useState([])
   const [cameraReady, setCameraReady] = useState(false)
+  const [facingMode, setFacingMode] = useState('user') // 'user' = front, 'environment' = back
   
   const [mobileTab, setMobileTab] = useState('camera') 
   const [selectedClip, setSelectedClip] = useState(null)
@@ -213,14 +215,32 @@ export default function Dashboard() {
   }
 
   // --- CAMERA ---
-  const startCamera = async () => {
+  const startCamera = async (targetMode = 'user') => {
+    // Stop existing stream first to release hardware
+    if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" }, audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+            width: { ideal: 1920 }, 
+            height: { ideal: 1080 }, 
+            facingMode: targetMode 
+        }, 
+        audio: true 
+      })
       videoRef.current.srcObject = stream
       streamRef.current = stream
       videoRef.current.play()
       setCameraReady(true)
+      setFacingMode(targetMode)
     } catch (err) { alert("Hardware Error: " + err.message) }
+  }
+
+  const toggleCameraFacing = async () => {
+    const newMode = facingMode === 'user' ? 'environment' : 'user'
+    await startCamera(newMode)
   }
 
   const toggleRecording = () => { isRecording ? stopRecording() : startRecording() }
@@ -443,8 +463,21 @@ export default function Dashboard() {
         <div className={cn("flex-col lg:col-span-7 gap-0 lg:gap-6 lg:flex h-full", mobileTab === 'camera' || mobileTab === 'logs' ? "flex" : "hidden lg:flex")}>
           <div className={cn("relative bg-black lg:rounded-3xl overflow-hidden border-b lg:border border-white/10 shadow-2xl flex justify-center shrink-0 transition-all", mobileTab === 'camera' ? "flex-1 lg:h-[60vh]" : "hidden lg:flex lg:h-[60vh]")}>
             <div className="relative aspect-[9/16] h-full w-auto bg-black lg:rounded-lg overflow-hidden border-x border-white/10">
-                {!cameraReady && <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 z-10"><button onClick={startCamera} className="px-6 py-3 bg-white text-black rounded-full font-bold flex gap-2"><Camera className="w-5 h-5" /> Activate Camera</button></div>}
+                {!cameraReady && <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 z-10"><button onClick={() => startCamera('user')} className="px-6 py-3 bg-white text-black rounded-full font-bold flex gap-2"><Camera className="w-5 h-5" /> Activate Camera</button></div>}
+                
                 <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+                
+                {/* CAMERA SWITCH BUTTON */}
+                {cameraReady && (
+                    <button 
+                        onClick={toggleCameraFacing} 
+                        disabled={isRecording}
+                        className="absolute top-4 right-4 p-3 bg-black/40 backdrop-blur-md border border-white/10 rounded-full text-white hover:bg-black/60 transition-colors z-30 disabled:opacity-0"
+                    >
+                        <RefreshCw className="w-5 h-5" />
+                    </button>
+                )}
+
                 <div className="absolute bottom-6 left-0 right-0 flex justify-center z-20"><button onClick={() => isRecording ? stopRecording() : startRecording()} disabled={!cameraReady} className={cn("h-20 w-20 rounded-full flex items-center justify-center border-4 shadow-xl transition-all", isRecording ? "bg-white border-white/50" : "bg-rose-600 border-white/20")}><div className={cn("transition-all duration-300", isRecording ? "w-8 h-8 bg-red-600 rounded-md" : "w-16 h-16 bg-transparent")} /></button></div>
             </div>
           </div>

@@ -8,6 +8,20 @@ import ProtectedRoute from './ProtectedRoute'
 // --- LANDING PAGE ---
 function LandingPage() {
   const navigate = useNavigate()
+
+  // FIX: Auto-redirect if already logged in (handles the OAuth callback)
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) navigate('/dashboard')
+    })
+    
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || session) navigate('/dashboard')
+    })
+
+    return () => subscription.unsubscribe()
+  }, [navigate])
+
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-rose-500/30 overflow-x-hidden">
       <div className="fixed inset-0 pointer-events-none">
@@ -36,7 +50,7 @@ function LandingPage() {
   )
 }
 
-// --- AUTH PAGE (UPDATED) ---
+// --- AUTH PAGE ---
 function AuthPage() {
   const [isSignUp, setIsSignUp] = useState(false)
   const [email, setEmail] = useState('')
@@ -46,18 +60,13 @@ function AuthPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    // 1. Check if already logged in
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) navigate('/dashboard')
     })
-
-    // 2. LISTEN for the Google Login Event (This fixes the redirect loop)
+    // Also listen here in case they just logged in
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_IN' || session) {
-            navigate('/dashboard')
-        }
+        if (event === 'SIGNED_IN' || session) navigate('/dashboard')
     })
-
     return () => subscription.unsubscribe()
   }, [navigate])
 
@@ -98,11 +107,12 @@ function AuthPage() {
   }
 
   const handleGoogleLogin = async () => {
-    // Ensure we redirect specifically to dashboard
     await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { 
-          redirectTo: window.location.origin + '/dashboard' 
+          // FIX: Redirect to Root (LandingPage handles the session check)
+          // This avoids the "ProtectedRoute" race condition
+          redirectTo: window.location.origin
       },
     })
   }
@@ -131,7 +141,7 @@ function AuthPage() {
   )
 }
 
-// --- NEW COMPONENT: HANDLE GOOGLE REDIRECT ---
+// --- AUTH CALLBACK HANDLER ---
 function AuthCallback() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -144,7 +154,6 @@ function AuthCallback() {
     if (code) {
         navigate(`/dashboard?code=${code}&state=${state || ''}`, { replace: true });
     } else {
-        // If just a regular auth redirect (login), just go to dashboard
         navigate('/dashboard');
     }
   }, [navigate, searchParams]);
