@@ -103,6 +103,10 @@ class AuthCallback(BaseModel):
     code: str
     platform: str
 
+class DisconnectRequest(BaseModel):
+    user_id: str
+    platform: str
+
 @app.get("/auth/status/{user_id}")
 def get_auth_status(user_id: str):
     """Returns a list of connected platforms for the user"""
@@ -135,25 +139,33 @@ def auth_callback(data: AuthCallback):
     """
     return social.exchange_code_for_token(data.user_id, data.code, data.platform)
 
+@app.post("/auth/disconnect")
+def auth_disconnect(data: DisconnectRequest):
+    """
+    Deletes the credentials for a specific platform.
+    """
+    try:
+        db = get_supabase()
+        res = db.table("platforms").delete().eq("user_id", data.user_id).eq("platform", data.platform).execute()
+        return {"status": "success", "message": f"Disconnected {data.platform}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.post("/upload")
 def upload_content(
     user_id: str = Form(...),
-    video_filename: str = Form(...), # Can be a local filename or a full Cloud URL
+    clip_id: str = Form(...), # Needed to update DB
+    video_filename: str = Form(...), 
     caption: str = Form(...),
-    platforms: str = Form(...) # Comma-separated: "youtube,instagram,twitter"
+    platforms: str = Form(...) 
 ):
-    """
-    Unified upload endpoint for all platforms.
-    Handles downloading remote files if necessary.
-    """
     platform_list = [p.strip() for p in platforms.split(",")]
     results = {}
     local_path = ""
     is_temp_download = False
 
-    # 1. Resolve Video File (Local vs Remote)
+    # 1. Download logic
     if "http" in video_filename:
-        # It's a URL (from Supabase/S3), download it first
         try:
             log_ui(f"📥 Downloading video for upload...")
             response = requests.get(video_filename, stream=True)
@@ -166,33 +178,51 @@ def upload_content(
         except Exception as e:
             return {"error": f"Failed to download video: {e}"}
     else:
-        # It's a local file in temp_storage
         local_path = os.path.join(UPLOAD_DIR, os.path.basename(video_filename))
     
     if not os.path.exists(local_path):
         return {"error": "Video file not found on server."}
 
     # 2. Iterate and Upload
+    db = get_supabase()
+    
+    # Fetch existing refs to append to them
+    current_clip = db.table("clips").select("social_refs").eq("id", clip_id).single().execute()
+    social_refs = current_clip.data.get("social_refs") or {}
+
     for p in platform_list:
         log_ui(f"🚀 Uploading to {p}...")
-        
         path_to_pass = local_path
-        # Instagram API requires a Public URL, not a local file
         if p == 'instagram' and "http" in video_filename:
             path_to_pass = video_filename 
         
         try:
             res = social.upload_video(user_id, p, path_to_pass, caption, caption)
-            results[p] = res
+            
             if res.get("status") == "success":
                 log_ui(f"✅ {p}: Upload Successful")
+                
+                # Generate Link based on ID
+                video_id = res.get("id") or res.get("details", {}).get("id")
+                link = ""
+                if p == 'youtube': link = f"https://youtube.com/shorts/{video_id}"
+                elif p == 'instagram': link = "https://instagram.com" 
+                
+                # Save to results and DB object
+                results[p] = {"status": "success", "link": link, "id": video_id}
+                social_refs[p] = link
             else:
+                results[p] = {"status": "error", "message": res.get("error")}
                 log_ui(f"❌ {p}: {res.get('error')}")
+                
         except Exception as e:
             results[p] = {"error": str(e)}
             log_ui(f"❌ {p}: Exception {e}")
 
-    # 3. Cleanup temp file
+    # 3. Update Database
+    db.table("clips").update({"social_refs": social_refs}).eq("id", clip_id).execute()
+
+    # 4. Cleanup
     if is_temp_download and os.path.exists(local_path):
         os.remove(local_path)
 
@@ -208,7 +238,7 @@ def convert_to_clean_mp4(input_path):
         clip.write_videofile(
             output_path, 
             codec='libx264', 
-            audio_codec='aac', # Crucial for social media
+            audio_codec='aac', 
             preset='ultrafast', 
             logger=None
         )
@@ -269,6 +299,7 @@ def process_video_pipeline(raw_file_path, user_id):
 
     # 4. Edit & Save
     try:
+        # Note: process_video_clips now handles dynamic font sizing
         final_videos = video.process_video_clips(clean_video_path, ai_response, transcript_data)
         
         for vid_path, title in final_videos:

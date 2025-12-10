@@ -42,6 +42,8 @@ CONFIG = {
     }
 }
 
+
+
 def get_auth_url(user_id, platform, client_id, client_secret):
     """Generates the Login URL for the specific platform and saves temp keys"""
     
@@ -165,6 +167,8 @@ def _upload_youtube(creds, video_path, title, description):
         return {"error": "YouTube upload requires a local file, path invalid."}
 
     import google.oauth2.credentials
+    from googleapiclient.errors import HttpError # Import this
+
     credentials = google.oauth2.credentials.Credentials(
         token=creds['access_token'],
         refresh_token=creds.get('refresh_token'),
@@ -185,6 +189,18 @@ def _upload_youtube(creds, video_path, title, description):
         )
         response = request.execute()
         return {"status": "success", "id": response.get('id')}
+    except HttpError as e:
+        # Better error parsing
+        reason = e.error_details[0].get('reason') if e.error_details else "Unknown"
+        message = e.error_details[0].get('message') if e.error_details else str(e)
+        
+        if reason == 'accessNotConfigured':
+            return {"error": "YouTube API is not enabled. Go to Google Cloud Console -> Library -> Enable 'YouTube Data API v3'."}
+        elif reason == 'uploadLimitExceeded':
+            return {"error": "YouTube Daily Upload Limit reached."}
+            
+        print(f"YouTube Upload Error: {e}")
+        return {"error": f"YouTube Error: {message}"}
     except Exception as e:
         return {"error": str(e)}
 
