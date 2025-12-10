@@ -3,19 +3,30 @@ import json
 from groq import Groq
 
 def get_client():
-    """Helper to get a clean Groq client"""
+    """Helper to get a clean Groq client with debugging"""
     api_key = os.environ.get("GROQ_API_KEY")
     
+    # --- DEBUGGING BLOCK ---
     if not api_key:
-        print("❌ CRITICAL ERROR: GROQ_API_KEY is missing in Environment Variables.")
+        print("🚨 CRITICAL: GROQ_API_KEY is missing from Environment Variables!")
         raise Exception("GROQ_API_KEY not set")
     
-    # Clean the key (Remove accidental spaces from copy-pasting)
-    api_key = api_key.strip()
+    # Strip whitespace (fixes copy-paste errors)
+    clean_key = api_key.strip()
     
-    return Groq(api_key=api_key)
+    # Print Masked Key to Logs (Safe to show)
+    # This helps you see if it's reading the wrong variable or an empty string
+    print(f"🔍 DEBUG: Loading Groq Key. Length: {len(clean_key)}")
+    if len(clean_key) > 5:
+        print(f"🔍 DEBUG: Key starts with: {clean_key[:4]}... and ends with: ...{clean_key[-3:]}")
+    else:
+        print(f"🔍 DEBUG: Key seems too short!")
+    # -----------------------
+
+    return Groq(api_key=clean_key)
 
 def transcribe_audio_groq(audio_path):
+    print(f"🎙️ Sending {os.path.basename(audio_path)} to Groq...")
     try:
         client = get_client()
         
@@ -32,7 +43,7 @@ def transcribe_audio_groq(audio_path):
             "segments": transcription.segments
         }
     except Exception as e:
-        # Pass the error up so main.py logs it
+        print(f"❌ Transcribe Logic Error: {e}")
         raise e
 
 def analyze_viral_clips(transcript_data):
