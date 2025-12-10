@@ -34,7 +34,7 @@ export default function Dashboard() {
   const [selectedClip, setSelectedClip] = useState(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
   
-  // Connection State
+  // Connection & Upload State
   const [connectedPlatforms, setConnectedPlatforms] = useState([])
   const [showConnectModal, setShowConnectModal] = useState(false)
   const [showCalendly, setShowCalendly] = useState(false)
@@ -47,6 +47,9 @@ export default function Dashboard() {
   const [postTitle, setPostTitle] = useState("")
   const [postCaption, setPostCaption] = useState("")
   const [uploadResult, setUploadResult] = useState(null)
+  
+  // Auto-Post Toggle
+  const [autoUpload, setAutoUpload] = useState(false)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -54,9 +57,12 @@ export default function Dashboard() {
   const chunkCounter = useRef(0)
   const logsEndRef = useRef(null)
   const userRef = useRef(null)
+  const autoUploadRef = useRef(false) // Ref to access inside closures
   
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+
+  useEffect(() => { autoUploadRef.current = autoUpload }, [autoUpload])
 
   const fetchConnections = async (userId) => {
       if(!userId) return
@@ -151,7 +157,7 @@ export default function Dashboard() {
   }
 
   const handleDisconnect = async (platform) => {
-      if(!confirm(`Are you sure you want to disconnect ${platform}?`)) return
+      if(!confirm(`Disconnect ${platform}?`)) return
       try {
           const res = await axios.post(`${API_URL}/auth/disconnect`, {
               user_id: user.id,
@@ -159,7 +165,7 @@ export default function Dashboard() {
           })
           if (res.data.status === 'success') {
               addLog(`Disconnected ${platform}`)
-              fetchConnections(user.id) // Refresh UI
+              fetchConnections(user.id)
           } else {
               alert("Failed to disconnect")
           }
@@ -253,16 +259,20 @@ export default function Dashboard() {
 
   const uploadChunk = async (blob, id) => {
     const userId = userRef.current ? userRef.current.id : "offline-user"
+    const isAuto = autoUploadRef.current
+    
     const formData = new FormData()
     formData.append("file", blob, `chunk_${id}.webm`)
     formData.append("user_id", userId) 
+    formData.append("auto_upload", isAuto ? "true" : "false")
+
     try { await axios.post(`${API_URL}/upload-chunk`, formData) } catch (err) { console.error(err) }
   }
 
   return (
     <div className="h-[100dvh] w-full bg-[#050505] text-zinc-300 font-sans overflow-hidden flex flex-col">
       
-      {/* --- MODALS --- */}
+      {/* MODALS */}
       <AnimatePresence>
         {showCalendly && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[150] flex items-center justify-center bg-black/95 p-4">
@@ -282,7 +292,7 @@ export default function Dashboard() {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4">
                 <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl w-full max-w-4xl relative h-[85vh] flex flex-col">
                     <button onClick={() => setShowConnectModal(false)} className="absolute top-4 right-4"><X className="w-5 h-5" /></button>
-                    <h2 className="text-xl font-bold text-white mb-6">Connect Accounts (BYOK)</h2>
+                    <h2 className="text-xl font-bold text-white mb-6">Connect Accounts</h2>
                     <div className="flex gap-6 h-full grow overflow-hidden">
                         <div className="w-1/3 flex flex-col gap-2 border-r border-zinc-800 pr-6 overflow-y-auto">
                             {Object.entries(PLATFORM_CONFIG).map(([key, conf]) => (
@@ -394,6 +404,24 @@ export default function Dashboard() {
       <nav className="h-14 border-b border-white/10 bg-black/90 backdrop-blur-xl z-50 flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-2 font-bold text-white"><Sparkles className="w-5 h-5 text-rose-500" /> DirectorFlow</div>
         <div className="flex items-center gap-4">
+            
+            {/* AUTO UPLOAD TOGGLE */}
+            <div 
+                className="flex items-center gap-2 cursor-pointer group" 
+                onClick={() => setAutoUpload(!autoUpload)}
+            >
+                <span className={cn("text-[10px] font-bold uppercase transition-colors hidden sm:block", autoUpload ? "text-green-400" : "text-zinc-500")}>
+                    Auto-Post
+                </span>
+                <div className={cn("w-10 h-5 rounded-full p-0.5 transition-colors relative", autoUpload ? "bg-green-500/20 border border-green-500/50" : "bg-zinc-800 border border-zinc-700")}>
+                    <motion.div 
+                        initial={false}
+                        animate={{ x: autoUpload ? 20 : 0 }}
+                        className={cn("w-3.5 h-3.5 rounded-full shadow-sm", autoUpload ? "bg-green-400" : "bg-zinc-500")}
+                    />
+                </div>
+            </div>
+
             {user && (
               <div className="relative">
                 <button onClick={() => setShowUserMenu(!showUserMenu)} className="w-8 h-8 bg-zinc-800 rounded-full flex items-center justify-center border border-zinc-700 hover:border-zinc-500"><User className="w-4 h-4" /></button>
@@ -411,10 +439,8 @@ export default function Dashboard() {
 
       {/* MAIN LAYOUT */}
       <main className="flex-1 flex flex-col lg:grid lg:grid-cols-12 lg:gap-6 lg:p-6 overflow-hidden relative">
-        
-        {/* LEFT COLUMN: CAMERA & LOGS */}
+        {/* LEFT: CAMERA & LOGS */}
         <div className={cn("flex-col lg:col-span-7 gap-0 lg:gap-6 lg:flex h-full", mobileTab === 'camera' || mobileTab === 'logs' ? "flex" : "hidden lg:flex")}>
-          
           <div className={cn("relative bg-black lg:rounded-3xl overflow-hidden border-b lg:border border-white/10 shadow-2xl flex justify-center shrink-0 transition-all", mobileTab === 'camera' ? "flex-1 lg:h-[60vh]" : "hidden lg:flex lg:h-[60vh]")}>
             <div className="relative aspect-[9/16] h-full w-auto bg-black lg:rounded-lg overflow-hidden border-x border-white/10">
                 {!cameraReady && <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 z-10"><button onClick={startCamera} className="px-6 py-3 bg-white text-black rounded-full font-bold flex gap-2"><Camera className="w-5 h-5" /> Activate Camera</button></div>}
@@ -422,14 +448,13 @@ export default function Dashboard() {
                 <div className="absolute bottom-6 left-0 right-0 flex justify-center z-20"><button onClick={() => isRecording ? stopRecording() : startRecording()} disabled={!cameraReady} className={cn("h-20 w-20 rounded-full flex items-center justify-center border-4 shadow-xl transition-all", isRecording ? "bg-white border-white/50" : "bg-rose-600 border-white/20")}><div className={cn("transition-all duration-300", isRecording ? "w-8 h-8 bg-red-600 rounded-md" : "w-16 h-16 bg-transparent")} /></button></div>
             </div>
           </div>
-
           <div className={cn("flex-col bg-black rounded-xl border border-zinc-800 overflow-hidden lg:flex lg:flex-1 min-h-0", mobileTab === 'logs' ? "flex flex-1" : "hidden lg:flex")}>
             <div className="px-4 py-2 border-b border-zinc-800 bg-zinc-900/50 flex items-center gap-2 shrink-0"><Terminal className="w-4 h-4 text-rose-500" /><span className="text-xs font-mono text-zinc-400">LOGS</span></div>
             <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-2 text-zinc-400">{logs.map((log, i) => <div key={i}>{log}</div>)}<div ref={logsEndRef} /></div>
           </div>
         </div>
 
-        {/* RIGHT COLUMN: GALLERY */}
+        {/* RIGHT: GALLERY */}
         <div className={cn("flex-col lg:col-span-5 overflow-hidden lg:rounded-2xl lg:bg-zinc-900/30 lg:border border-white/5 bg-zinc-950 h-full", mobileTab === 'gallery' ? "flex flex-1" : "hidden lg:flex")}>
           <div className="flex-1 overflow-y-auto p-4 relative space-y-3 pb-20 min-h-0">
               {gallery.map((clip) => {
@@ -443,8 +468,16 @@ export default function Dashboard() {
                             <div className="flex justify-between items-end">
                                 <span className="text-[10px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded">{clip.score}/10</span>
                                 <div className="flex gap-1">
-                                    {uploadedYoutube && <Youtube className="w-3 h-3 text-red-500" />}
-                                    {uploadedInsta && <Instagram className="w-3 h-3 text-pink-500" />}
+                                    {uploadedYoutube && (
+                                        <a href={clip.social_refs.youtube} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-red-500 hover:scale-110 transition-transform">
+                                            <Youtube className="w-3.5 h-3.5" />
+                                        </a>
+                                    )}
+                                    {uploadedInsta && (
+                                        <a href={clip.social_refs.instagram} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-pink-500 hover:scale-110 transition-transform">
+                                            <Instagram className="w-3.5 h-3.5" />
+                                        </a>
+                                    )}
                                 </div>
                             </div>
                         </div>
