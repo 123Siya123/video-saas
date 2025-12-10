@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Camera, Play, UploadCloud, Sparkles, 
   Terminal, X, Maximize2, LogOut, User, Square, Loader2, Link as LinkIcon,
-  Youtube, Instagram, Twitter, Facebook
+  Youtube, Instagram, Twitter, Facebook, Calendar, HelpCircle, ExternalLink, Copy
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
@@ -14,12 +14,69 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 function cn(...inputs) { return twMerge(clsx(inputs)) }
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+const CALENDLY_URL = import.meta.env.VITE_CALENDLY_URL || "https://calendly.com/your-username/30min"; 
 
+// --- DETAILED PLATFORM MANUALS ---
 const PLATFORM_CONFIG = {
-    youtube: { label: "YouTube", icon: Youtube, color: "text-red-500", help: "Enable YouTube Data API v3. Create OAuth Client ID (Web Application). Add Redirect URI." },
-    instagram: { label: "Instagram", icon: Instagram, color: "text-pink-500", help: "Create Meta App. Add Instagram Basic Display. Add Redirect URI." },
-    twitter: { label: "Twitter (X)", icon: Twitter, color: "text-blue-400", help: "Create Project in Developer Portal. Enable OAuth 2.0. Add Redirect URI." },
-    tiktok: { label: "TikTok", icon: Play, color: "text-black", help: "Requires TikTok for Developers App. Add Redirect URI." }
+    youtube: { 
+        label: "YouTube", 
+        icon: Youtube, 
+        color: "text-red-500",
+        portalUrl: "https://console.cloud.google.com/apis/dashboard",
+        steps: [
+            "Go to Google Cloud Console and create a new Project.",
+            "In 'APIs & Services' -> 'Library', search for and enable 'YouTube Data API v3'.",
+            "Go to 'OAuth Consent Screen'. Select 'External'. Add your email as a 'Test User'.",
+            "Go to 'Credentials' -> 'Create Credentials' -> 'OAuth Client ID'.",
+            "Application Type: 'Web Application'.",
+            "Add the Redirect URI below to 'Authorized redirect URIs'.",
+            "Copy the Client ID and Client Secret."
+        ]
+    },
+    instagram: { 
+        label: "Instagram", 
+        icon: Instagram, 
+        color: "text-pink-500", 
+        portalUrl: "https://developers.facebook.com/apps/",
+        steps: [
+            "Go to Meta for Developers -> 'My Apps' -> 'Create App'.",
+            "Select 'Business' type (not Consumer).",
+            "On the Dashboard, scroll to 'Instagram Graph API' and click 'Set Up'.",
+            "Go to 'Settings' -> 'Basic' on the left sidebar.",
+            "Scroll down to 'Add Platform' -> Select 'Website'.",
+            "Enter your website URL (or localhost) in Site URL.",
+            "Copy App ID (Client ID) and App Secret (Client Secret)."
+        ]
+    },
+    twitter: { 
+        label: "Twitter (X)", 
+        icon: Twitter, 
+        color: "text-blue-400", 
+        portalUrl: "https://developer.twitter.com/en/portal/dashboard",
+        steps: [
+            "Go to the X Developer Portal and create a 'Free' Project.",
+            "Navigate to 'Keys and tokens' for your App.",
+            "Click 'Set up' under 'User authentication settings'.",
+            "App Permissions: Select 'Read and Write'.",
+            "Type of App: Select 'Web App, Automated App or Bot'.",
+            "Enter the Redirect URI below in 'Callback URI / Redirect URL'.",
+            "Enter your website URL (or http://127.0.0.1:5173 for dev).",
+            "Save and copy the 'OAuth 2.0 Client ID' and 'Client Secret'."
+        ]
+    },
+    tiktok: { 
+        label: "TikTok", 
+        icon: Play, 
+        color: "text-black", 
+        portalUrl: "https://developers.tiktok.com/",
+        steps: [
+            "Go to TikTok for Developers and create an App.",
+            "In 'Products', add 'Video Kit' and 'Login Kit'.",
+            "Go to 'Manage' -> 'Redirect URIs' and add the URI below.",
+            "Note: TikTok requires Manual App Review to allow uploads.",
+            "Once approved, copy the Client Key and Client Secret from 'Basic Information'."
+        ]
+    }
 }
 
 export default function Dashboard() {
@@ -34,6 +91,7 @@ export default function Dashboard() {
   
   // Connection Wizard State
   const [showConnectModal, setShowConnectModal] = useState(false)
+  const [showCalendly, setShowCalendly] = useState(false)
   const [activeConnectTab, setActiveConnectTab] = useState('youtube') 
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -133,19 +191,17 @@ export default function Dashboard() {
       } catch(e) { alert("Error initializing auth") }
   }
 
-  // --- POST TO SOCIALS ---
   const handlePost = async () => {
       if (!selectedClip || !user) return
       setIsPosting(true)
       const formData = new FormData()
       formData.append("user_id", user.id)
-      formData.append("video_filename", selectedClip.filename) // Pass URL
+      formData.append("video_filename", selectedClip.filename) 
       formData.append("caption", selectedClip.description)
       formData.append("platforms", uploadPlatforms.join(','))
 
       try {
           const res = await axios.post(`${API_URL}/upload`, formData)
-          // Simple result summary
           const summary = Object.entries(res.data).map(([k,v]) => `${k}: ${v.status || 'error'}`).join('\n')
           alert(summary)
           addLog("✅ Upload process finished")
@@ -159,7 +215,6 @@ export default function Dashboard() {
       setUploadPlatforms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])
   }
 
-  // --- CAMERA LOGIC (Fixed ReferenceError) ---
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -222,37 +277,82 @@ export default function Dashboard() {
   return (
     <div className="h-[100dvh] w-full bg-[#050505] text-zinc-300 font-sans overflow-hidden flex flex-col">
       
+      {/* CALENDLY EMBED MODAL */}
+      <AnimatePresence>
+        {showCalendly && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[150] flex items-center justify-center bg-black/95 p-4">
+                <div className="bg-white rounded-xl w-full max-w-4xl h-[85vh] relative overflow-hidden flex flex-col">
+                    <div className="bg-zinc-100 p-2 flex justify-between items-center border-b">
+                        <span className="text-black font-bold px-4 text-sm">Schedule Setup Call</span>
+                        <button onClick={() => setShowCalendly(false)} className="p-2 hover:bg-zinc-200 rounded-full text-black"><X className="w-5 h-5" /></button>
+                    </div>
+                    <iframe src={CALENDLY_URL} width="100%" height="100%" frameBorder="0" title="Select a Date & Time"></iframe>
+                </div>
+            </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* CONNECTION WIZARD */}
       <AnimatePresence>
         {showConnectModal && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4">
-                <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl w-full max-w-2xl relative h-[80vh] flex flex-col">
+                <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl w-full max-w-4xl relative h-[85vh] flex flex-col">
                     <button onClick={() => setShowConnectModal(false)} className="absolute top-4 right-4"><X className="w-5 h-5" /></button>
                     <h2 className="text-xl font-bold text-white mb-6">Connect Accounts (BYOK)</h2>
                     
-                    <div className="flex gap-4 h-full">
+                    <div className="flex gap-6 h-full grow overflow-hidden">
                         {/* Sidebar */}
-                        <div className="w-1/3 border-r border-zinc-800 pr-4 space-y-2">
+                        <div className="w-1/3 flex flex-col gap-2 border-r border-zinc-800 pr-6 overflow-y-auto">
                             {Object.entries(PLATFORM_CONFIG).map(([key, conf]) => (
                                 <button key={key} onClick={() => { setActiveConnectTab(key); setClientId(''); setClientSecret(''); }} 
-                                    className={cn("w-full text-left px-3 py-3 rounded-lg text-sm font-bold flex items-center gap-2", activeConnectTab === key ? "bg-white text-black" : "text-zinc-500 hover:bg-zinc-800")}>
+                                    className={cn("w-full text-left px-3 py-3 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors", activeConnectTab === key ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:bg-zinc-800 hover:text-white")}>
                                     <conf.icon className={cn("w-4 h-4", activeConnectTab !== key && conf.color)} /> {conf.label}
                                 </button>
                             ))}
+                            
+                            <div className="mt-auto pt-6 border-t border-zinc-800">
+                                <p className="text-[10px] text-zinc-500 mb-2 font-medium uppercase tracking-wider">Trouble connecting?</p>
+                                <button onClick={() => setShowCalendly(true)} className="w-full bg-green-600/10 border border-green-500/50 text-green-400 hover:bg-green-600 hover:text-white px-3 py-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all group">
+                                    <Calendar className="w-4 h-4 group-hover:scale-110 transition-transform" /> Have us add it free
+                                </button>
+                            </div>
                         </div>
 
                         {/* Content */}
-                        <div className="w-2/3 pl-4 flex flex-col">
-                            <div className="bg-zinc-950 p-4 rounded-lg border border-zinc-800 text-xs space-y-2 mb-6 text-zinc-400 leading-relaxed">
-                                <p className="font-bold text-white mb-2">Instructions for {PLATFORM_CONFIG[activeConnectTab].label}:</p>
-                                <p>{PLATFORM_CONFIG[activeConnectTab].help}</p>
-                                <p className="mt-2 text-zinc-600">Redirect URI: <br/><code className="bg-black px-1 rounded text-white select-all">{window.location.origin}/auth/callback</code></p>
+                        <div className="w-2/3 flex flex-col overflow-y-auto pr-2">
+                            <div className="bg-zinc-950 p-5 rounded-xl border border-zinc-800 text-sm space-y-4 mb-6 text-zinc-400 leading-relaxed shadow-inner">
+                                <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
+                                    <span className="text-white font-bold flex items-center gap-2">
+                                        <HelpCircle className="w-4 h-4 text-rose-500" /> Instructions for {PLATFORM_CONFIG[activeConnectTab].label}
+                                    </span>
+                                    <a href={PLATFORM_CONFIG[activeConnectTab].portalUrl} target="_blank" rel="noreferrer" className="text-xs text-rose-400 hover:underline flex items-center gap-1">
+                                        Open Developer Portal <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                </div>
+                                
+                                <ul className="list-decimal list-inside space-y-2 text-xs">
+                                    {PLATFORM_CONFIG[activeConnectTab].steps.map((step, i) => (
+                                        <li key={i} className="pl-1 marker:text-zinc-600">{step}</li>
+                                    ))}
+                                </ul>
+
+                                <div className="pt-2 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50">
+                                    <p className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Redirect URI to Copy:</p>
+                                    <div className="flex items-center gap-2">
+                                        <code className="bg-black px-2 py-1.5 rounded border border-zinc-800 text-green-400 select-all block w-full text-xs font-mono truncate">
+                                            {window.location.origin}/auth/callback
+                                        </code>
+                                        <button onClick={() => navigator.clipboard.writeText(`${window.location.origin}/auth/callback`)} className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400 transition-colors">
+                                            <Copy className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
 
-                            <div className="space-y-4 mt-auto">
-                                <div><label className="text-xs font-bold uppercase text-zinc-500">Client ID</label><input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-black border border-zinc-700 rounded p-3 text-white text-sm" /></div>
-                                <div><label className="text-xs font-bold uppercase text-zinc-500">Client Secret</label><input value={clientSecret} onChange={e => setClientSecret(e.target.value)} className="w-full bg-black border border-zinc-700 rounded p-3 text-white text-sm" type="password" /></div>
-                                <button onClick={initConnection} className="w-full bg-white text-black font-bold py-3 rounded-lg hover:bg-zinc-200 transition-colors">Authenticate</button>
+                            <div className="space-y-4 mt-auto pb-2">
+                                <div><label className="text-xs font-bold uppercase text-zinc-500 mb-1.5 block">Client ID</label><input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm focus:border-rose-500 outline-none transition-colors" placeholder={`Paste ${PLATFORM_CONFIG[activeConnectTab].label} Client ID`} /></div>
+                                <div><label className="text-xs font-bold uppercase text-zinc-500 mb-1.5 block">Client Secret</label><input value={clientSecret} onChange={e => setClientSecret(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm focus:border-rose-500 outline-none transition-colors" type="password" placeholder="Paste Client Secret" /></div>
+                                <button onClick={initConnection} className="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:bg-zinc-200 transition-colors shadow-lg mt-2">Authenticate & Connect</button>
                             </div>
                         </div>
                     </div>
@@ -269,9 +369,9 @@ export default function Dashboard() {
               <div className="flex items-center justify-between p-4 border-b border-zinc-800"><h3 className="text-white font-bold">{selectedClip.title}</h3><button onClick={() => setSelectedClip(null)}><X className="w-5 h-5" /></button></div>
               <div className="relative bg-black flex-1 flex items-center justify-center"><video src={selectedClip.filename} className="max-h-[50vh] w-full object-contain" controls autoPlay /></div>
               <div className="p-5 bg-zinc-900 border-t border-zinc-800 space-y-4">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                     {Object.keys(PLATFORM_CONFIG).map(p => (
-                        <button key={p} onClick={() => toggleUploadPlatform(p)} className={cn("px-3 py-1 rounded-full text-xs font-bold border capitalize", uploadPlatforms.includes(p) ? "bg-white text-black border-white" : "bg-zinc-800 text-zinc-500 border-zinc-700")}>{p}</button>
+                        <button key={p} onClick={() => toggleUploadPlatform(p)} className={cn("px-3 py-1 rounded-full text-xs font-bold border capitalize transition-colors", uploadPlatforms.includes(p) ? "bg-white text-black border-white" : "bg-zinc-800 text-zinc-500 border-zinc-700 hover:border-zinc-500")}>{p}</button>
                     ))}
                 </div>
                 <button onClick={handlePost} disabled={isPosting} className="w-full bg-rose-600 text-white py-3 rounded-xl font-bold hover:bg-rose-500 flex justify-center gap-2">{isPosting ? <Loader2 className="animate-spin" /> : <UploadCloud />} Post to Selected</button>
@@ -308,12 +408,12 @@ export default function Dashboard() {
             <div className="relative aspect-[9/16] h-full w-auto bg-black lg:rounded-lg overflow-hidden border-x border-white/10">
                 {!cameraReady && <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 z-10"><button onClick={startCamera} className="px-6 py-3 bg-white text-black rounded-full font-bold flex gap-2"><Camera className="w-5 h-5" /> Activate Camera</button></div>}
                 <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
-                <div className="absolute bottom-6 left-0 right-0 flex justify-center z-20"><button onClick={toggleRecording} disabled={!cameraReady} className={cn("h-20 w-20 rounded-full flex items-center justify-center border-4 shadow-xl transition-all", isRecording ? "bg-white border-white/50" : "bg-rose-600 border-white/20")}><div className={cn("transition-all duration-300", isRecording ? "w-8 h-8 bg-red-600 rounded-md" : "w-16 h-16 bg-transparent")} /></button></div>
+                <div className="absolute bottom-6 left-0 right-0 flex justify-center z-20"><button onClick={() => isRecording ? stopRecording() : startRecording()} disabled={!cameraReady} className={cn("h-20 w-20 rounded-full flex items-center justify-center border-4 shadow-xl transition-all", isRecording ? "bg-white border-white/50" : "bg-rose-600 border-white/20")}><div className={cn("transition-all duration-300", isRecording ? "w-8 h-8 bg-red-600 rounded-md" : "w-16 h-16 bg-transparent")} /></button></div>
             </div>
           </div>
           <div className="hidden lg:flex bg-zinc-900/50 border border-white/5 p-6 rounded-2xl items-center justify-between backdrop-blur-md">
             <div><h3 className="text-white font-medium">Neural Command</h3><p className="text-xs text-zinc-500">Auto-Director Mode</p></div>
-            <button onClick={toggleRecording} disabled={!cameraReady} className={cn("px-8 py-4 rounded-xl font-bold flex gap-3 shadow-lg transition-colors", isRecording ? "bg-zinc-800 text-red-400 border border-red-500/20" : "bg-rose-600 text-white")}>{isRecording ? "STOP RECORDING" : "START RECORDING"}</button>
+            <button onClick={() => isRecording ? stopRecording() : startRecording()} disabled={!cameraReady} className={cn("px-8 py-4 rounded-xl font-bold flex gap-3 shadow-lg transition-colors", isRecording ? "bg-zinc-800 text-red-400 border border-red-500/20" : "bg-rose-600 text-white")}>{isRecording ? "STOP RECORDING" : "START RECORDING"}</button>
           </div>
           <div className="hidden lg:flex flex-col bg-black rounded-xl border border-zinc-800 h-full overflow-hidden min-h-[150px]">
             <div className="px-4 py-2 border-b border-zinc-800 bg-zinc-900/50 flex items-center gap-2"><Terminal className="w-4 h-4 text-rose-500" /><span className="text-xs font-mono text-zinc-400">LOGS</span></div>
