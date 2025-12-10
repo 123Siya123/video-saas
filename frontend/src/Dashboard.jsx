@@ -16,7 +16,6 @@ function cn(...inputs) { return twMerge(clsx(inputs)) }
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
 const CALENDLY_URL = import.meta.env.VITE_CALENDLY_URL || "https://calendly.com/your-username/30min"; 
 
-// --- CLEANED MANUALS (No Numbers in Text) ---
 const PLATFORM_CONFIG = {
     youtube: { 
         label: "YouTube", 
@@ -124,8 +123,7 @@ export default function Dashboard() {
           const res = await axios.get(`${API_URL}/auth/status/${userId}`)
           if(res.data.connected) {
               setConnectedPlatforms(res.data.connected)
-              // Auto-select connected platforms for upload
-              setUploadPlatforms(res.data.connected)
+              setUploadPlatforms(res.data.connected) // Auto-select what's connected
           }
       } catch(e) { console.error("Status check failed", e) }
   }
@@ -138,7 +136,7 @@ export default function Dashboard() {
     const completeAuth = async () => {
         const { data: { session } } = await supabase.auth.getSession()
         if (code && session && pendingPlatform) {
-            // Clean URL
+            // Remove code from URL to clean it up
             window.history.replaceState({}, document.title, "/dashboard")
             
             addLog(`🔄 Finalizing ${pendingPlatform} Connection...`)
@@ -221,8 +219,8 @@ export default function Dashboard() {
       setIsPosting(true)
       const formData = new FormData()
       formData.append("user_id", user.id)
-      formData.append("video_filename", selectedClip.filename)
-      formData.append("caption", postCaption || selectedClip.description) // Use user caption or default
+      formData.append("video_filename", selectedClip.filename) 
+      formData.append("caption", postCaption || selectedClip.description) 
       formData.append("platforms", uploadPlatforms.join(','))
 
       try {
@@ -237,7 +235,6 @@ export default function Dashboard() {
   }
 
   const toggleUploadPlatform = (p) => {
-      // Don't allow selecting disconnected platforms
       if (!connectedPlatforms.includes(p)) {
           if(confirm(`${PLATFORM_CONFIG[p].label} is not connected. Connect now?`)) {
               setSelectedClip(null)
@@ -255,7 +252,6 @@ export default function Dashboard() {
       setPostCaption(`${clip.title}\n\n${clip.description}\n\n#viral #fyp`)
   }
 
-  // --- CAMERA LOGIC ---
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" }, audio: true })
@@ -314,7 +310,7 @@ export default function Dashboard() {
   return (
     <div className="h-[100dvh] w-full bg-[#050505] text-zinc-300 font-sans overflow-hidden flex flex-col">
       
-      {/* CALENDLY */}
+      {/* CALENDLY EMBED MODAL */}
       <AnimatePresence>
         {showCalendly && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[150] flex items-center justify-center bg-black/95 p-4">
@@ -360,19 +356,20 @@ export default function Dashboard() {
                         {/* Content */}
                         <div className="w-2/3 flex flex-col overflow-y-auto pr-2">
                             <div className="bg-zinc-950 p-5 rounded-xl border border-zinc-800 text-sm space-y-4 mb-6 text-zinc-400 leading-relaxed shadow-inner">
-                                <div className="flex items-center gap-2 text-white font-bold pb-2 border-b border-zinc-900">
-                                    <HelpCircle className="w-4 h-4 text-rose-500" /> Instructions for {PLATFORM_CONFIG[activeConnectTab].label}
+                                <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
+                                    <span className="text-white font-bold flex items-center gap-2">
+                                        <HelpCircle className="w-4 h-4 text-rose-500" /> Instructions for {PLATFORM_CONFIG[activeConnectTab].label}
+                                    </span>
+                                    <a href={PLATFORM_CONFIG[activeConnectTab].portalUrl} target="_blank" rel="noreferrer" className="text-xs text-rose-400 hover:underline flex items-center gap-1">
+                                        Open Portal <ExternalLink className="w-3 h-3" />
+                                    </a>
                                 </div>
                                 
-                                <p className="text-zinc-300">
-                                    Go to: <a href={PLATFORM_CONFIG[activeConnectTab].portalUrl} target="_blank" rel="noreferrer" className="text-rose-400 hover:underline font-bold ml-1">{PLATFORM_CONFIG[activeConnectTab].portalName} <ExternalLink className="w-3 h-3 inline" /></a>
-                                </p>
-
-                                <ol className="list-decimal list-inside space-y-3 text-xs ml-1">
+                                <ul className="list-decimal list-inside space-y-2 text-xs">
                                     {PLATFORM_CONFIG[activeConnectTab].steps.map((step, i) => (
-                                        <li key={i} className="pl-1 marker:text-zinc-500 marker:font-bold">{step}</li>
+                                        <li key={i} className="pl-1 marker:text-zinc-600">{step}</li>
                                     ))}
-                                </ol>
+                                </ul>
 
                                 <div className="pt-2 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50 mt-4">
                                     <p className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Redirect URI to Copy:</p>

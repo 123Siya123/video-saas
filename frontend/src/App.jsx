@@ -1,7 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, useNavigate, useSearchParams } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Sparkles, ArrowRight, Chrome, ArrowLeft, Mail, AlertCircle, Lock, Loader2 } from 'lucide-react'
+import { Sparkles, Chrome, ArrowLeft, Mail, AlertCircle, Lock, Loader2 } from 'lucide-react'
 import Dashboard from './Dashboard'
 import ProtectedRoute from './ProtectedRoute'
 
@@ -29,7 +29,7 @@ function LandingPage() {
         <h1 className="text-5xl md:text-7xl lg:text-8xl font-bold tracking-tight mb-8 bg-gradient-to-b from-white via-white to-zinc-500 bg-clip-text text-transparent">Dominate the <br />Attention Economy.</h1>
         <p className="text-lg md:text-xl text-zinc-500 max-w-2xl mx-auto mb-10 leading-relaxed">The reason you aren't growing is volume. <br />Our AI Director watches your life, edits the viral moments, and posts them.</p>
         <div className="flex flex-col md:flex-row justify-center gap-4">
-          <button onClick={() => navigate('/login')} className="px-8 py-4 bg-white text-black rounded-full font-bold hover:scale-105 transition-transform flex items-center justify-center gap-2 shadow-xl shadow-white/10">Start Filming Now <ArrowRight className="w-4 h-4" /></button>
+          <button onClick={() => navigate('/login')} className="px-8 py-4 bg-white text-black rounded-full font-bold hover:scale-105 transition-transform flex items-center justify-center gap-2 shadow-xl shadow-white/10">Start Filming Now</button>
         </div>
       </div>
     </div>
@@ -67,7 +67,7 @@ function AuthPage() {
         }
       } else {
         if (data.user && data.user.identities && data.user.identities.length === 0) {
-             setErrorMsg("This email is already taken (likely via Google). Please log in with Google.")
+             setErrorMsg("This email is already taken. Please log in with Google.")
         } else {
              alert("Account created! Please check your email to confirm.")
         }
@@ -118,23 +118,29 @@ function AuthPage() {
   )
 }
 
-// --- AUTH CALLBACK HANDLER (Fixes Blank Screen) ---
+// --- NEW COMPONENT: HANDLE GOOGLE REDIRECT ---
 function AuthCallback() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Forward all params (code, state) to the dashboard so Dashboard.jsx can handle it
-    const params = searchParams.toString();
-    navigate(`/dashboard?${params}`, { replace: true });
+    // 1. Get the code from URL
+    const code = searchParams.get('code');
+    const state = searchParams.get('state'); // (Optional, usually platform name)
+    
+    // 2. Redirect to Dashboard with these params so Dashboard.jsx can process them
+    if (code) {
+        // We use 'replace' to prevent going back to this blank page
+        navigate(`/dashboard?code=${code}&state=${state || ''}`, { replace: true });
+    } else {
+        navigate('/dashboard');
+    }
   }, [navigate, searchParams]);
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center text-white">
-      <div className="flex flex-col items-center gap-4">
-        <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
-        <p className="text-zinc-400 animate-pulse">Verifying Connection...</p>
-      </div>
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center text-white space-y-4">
+      <Loader2 className="w-10 h-10 animate-spin text-rose-500" />
+      <p className="text-zinc-400 font-mono">Verifying Social Connection...</p>
     </div>
   );
 }
@@ -147,7 +153,7 @@ export default function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<AuthPage />} />
         
-        {/* Handles the Google Redirect URI */}
+        {/* THIS WAS MISSING BEFORE - IT FIXES THE DARK SCREEN */}
         <Route path="/auth/callback" element={<AuthCallback />} />
         
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
