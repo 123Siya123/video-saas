@@ -22,15 +22,16 @@ const PLATFORM_CONFIG = {
         label: "YouTube", 
         icon: Youtube, 
         color: "text-red-500",
-        portalUrl: "https://console.cloud.google.com/apis/dashboard",
+        portalUrl: "https://console.cloud.google.com/apis/credentials/consent",
         steps: [
-            "Go to Google Cloud Console and create a new Project.",
-            "In 'APIs & Services' -> 'Library', search for and enable 'YouTube Data API v3'.",
-            "Go to 'OAuth Consent Screen'. Select 'External'. Add your email as a 'Test User'.",
-            "Go to 'Credentials' -> 'Create Credentials' -> 'OAuth Client ID'.",
-            "Application Type: 'Web Application'.",
-            "Add the Redirect URI below to 'Authorized redirect URIs'.",
-            "Copy the Client ID and Client Secret."
+            "1. Go to Google Cloud Console -> 'OAuth Consent Screen'.",
+            "2. Set 'User Type' to 'External'.",
+            "3. IMPORTANT: Under 'Test Users', click 'Add Users' and enter YOUR email address.",
+            "4. Go to 'APIs & Services' -> 'Library' -> Enable 'YouTube Data API v3'.",
+            "5. Go to 'Credentials' -> 'Create Credentials' -> 'OAuth Client ID'.",
+            "6. Application Type: 'Web Application'.",
+            "7. Add Redirect URI: " + window.location.origin + "/auth/callback",
+            "8. Copy Client ID and Secret."
         ]
     },
     instagram: { 
@@ -60,7 +61,7 @@ const PLATFORM_CONFIG = {
             "App Permissions: Select 'Read and Write'.",
             "Type of App: Select 'Web App, Automated App or Bot'.",
             "Enter the Redirect URI below in 'Callback URI / Redirect URL'.",
-            "Enter your website URL (or http://127.0.0.1:5173 for dev).",
+            "Enter your website URL.",
             "Save and copy the 'OAuth 2.0 Client ID' and 'Client Secret'."
         ]
     },

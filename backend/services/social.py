@@ -15,7 +15,6 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Change for production
 REDIRECT_URI = "https://video-saas-1.onrender.com/auth/callback" 
-# REDIRECT_URI = "https://your-app.onrender.com/auth/callback"
 
 # --- PLATFORM CONFIGS ---
 CONFIG = {
