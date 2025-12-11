@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, concatenate_videoclips
 from supabase import create_client, Client
 from pydantic import BaseModel
 import shutil
@@ -9,6 +9,7 @@ import os
 import uuid
 import datetime
 import requests 
+import glob
 from services import ai, video, social
 
 # --- CONFIGURATION ---
@@ -50,6 +51,10 @@ app.add_middleware(
 
 UPLOAD_DIR = "temp_storage"
 if not os.path.exists(UPLOAD_DIR): os.makedirs(UPLOAD_DIR)
+
+# Folder for Lite Mode buffers
+LITE_BUFFER_DIR = os.path.join(UPLOAD_DIR, "lite_buffers")
+if not os.path.exists(LITE_BUFFER_DIR): os.makedirs(LITE_BUFFER_DIR)
 
 UI_LOGS = []
 def log_ui(msg):
@@ -171,7 +176,6 @@ def upload_content(
                 log_ui(f"✅ {p}: Upload Successful")
                 video_id = res.get("id") or res.get("details", {}).get("id")
                 
-                # Construct Link
                 link = ""
                 if p == 'youtube': link = f"https://youtube.com/shorts/{video_id}"
                 elif p == 'instagram': link = "https://instagram.com"
@@ -219,7 +223,7 @@ def upload_to_supabase_storage(local_path, destination_name):
 
 def process_video_pipeline(raw_file_path, user_id, auto_upload=False):
     filename = os.path.basename(raw_file_path)
-    log_ui(f"⚙️ Processing for User: {user_id[:5]}...")
+    log_ui(f"⚙️ Processing Pipeline User: {user_id[:5]}...")
 
     clean_video_path = convert_to_clean_mp4(raw_file_path)
     if not clean_video_path: cleanup(raw_file_path); return
@@ -236,27 +240,24 @@ def process_video_pipeline(raw_file_path, user_id, auto_upload=False):
         cleanup(raw_file_path, clean_video_path, temp_audio)
         return
 
-    log_ui("🧠 Analyzing...")
+    log_ui("🧠 Analyzing Content...")
     ai_response = ai.analyze_viral_clips(transcript_data)
     clips_found = ai_response.get('clips', [])
-    log_ui(f"✂️ Found {len(clips_found)} clip(s).")
+    log_ui(f"✂️ Found {len(clips_found)} viral candidate(s).")
 
     try:
         final_videos = video.process_video_clips(clean_video_path, ai_response, transcript_data)
         
         db = get_supabase()
         
-        # Determine Connected Platforms for Auto Upload
         connected_platforms = []
         if auto_upload:
             res = db.table("platforms").select("platform").eq("user_id", user_id).execute()
             connected_platforms = [r['platform'] for r in res.data]
-            if connected_platforms:
-                log_ui(f"⚡ Auto-Upload Active: {connected_platforms}")
 
         for vid_path, title in final_videos:
             local_filename = os.path.basename(vid_path)
-            log_ui(f"☁️ Uploading {title}...")
+            log_ui(f"☁️ Uploading Cloud: {title}...")
             public_url = upload_to_supabase_storage(vid_path, local_filename)
             
             if public_url:
@@ -264,7 +265,6 @@ def process_video_pipeline(raw_file_path, user_id, auto_upload=False):
                 score = clip_meta['score'] if clip_meta else 0
                 desc = clip_meta.get('viral_description', "Auto-generated clip")
 
-                # Insert Clip
                 data = {
                     "user_id": user_id,
                     "filename": public_url,
@@ -273,34 +273,27 @@ def process_video_pipeline(raw_file_path, user_id, auto_upload=False):
                     "score": score
                 }
                 clip_insert = db.table("clips").insert(data).execute()
-                
                 new_clip_id = clip_insert.data[0]['id'] if clip_insert.data else None
-                log_ui(f"✅ PUBLISHED: {title}")
+                log_ui(f"✅ PUBLISHED TO GALLERY: {title}")
 
-                # --- AUTO UPLOAD LOGIC ---
+                # Auto Upload
                 if auto_upload and connected_platforms and new_clip_id:
                     social_refs = {}
                     for p in connected_platforms:
                         try:
-                            # Auto-post needs simple caption
                             caption = f"{title}\n\n{desc}\n\n#viral #directorflow"
                             res = social.upload_video(user_id, p, vid_path, title, caption)
-                            
                             if res.get("status") == "success":
                                 video_id = res.get("id")
                                 link = f"https://youtube.com/shorts/{video_id}" if p == 'youtube' else "https://instagram.com"
                                 social_refs[p] = link
                                 log_ui(f"🚀 Auto-Posted to {p}")
-                            else:
-                                log_ui(f"⚠️ Auto-Post Failed {p}: {res.get('error')}")
                         except Exception as ex:
                             log_ui(f"⚠️ Auto-Post Error {p}: {ex}")
                     
-                    # Save links
                     if social_refs:
                         db.table("clips").update({"social_refs": social_refs}).eq("id", new_clip_id).execute()
 
-                # Cleanup local file
                 if os.path.exists(vid_path): os.remove(vid_path)
             
     except Exception as e:
@@ -316,18 +309,77 @@ def cleanup(*files):
             try: os.remove(f)
             except: pass
 
+# --- LITE MODE ACCUMULATOR ---
+
+def handle_lite_accumulation(new_file_path, user_id, auto_upload):
+    """
+    Accumulates small chunks. If total > 2 mins, merges and processes.
+    """
+    user_buffer_dir = os.path.join(LITE_BUFFER_DIR, user_id)
+    if not os.path.exists(user_buffer_dir): os.makedirs(user_buffer_dir)
+    
+    # Move new chunk to user folder with timestamp ordering
+    timestamp = int(datetime.datetime.now().timestamp() * 1000)
+    dest_path = os.path.join(user_buffer_dir, f"{timestamp}.webm")
+    shutil.move(new_file_path, dest_path)
+    
+    # Check total duration (approx via file count for speed)
+    # 15s chunks * 8 = 120s (2 mins)
+    files = sorted(glob.glob(os.path.join(user_buffer_dir, "*.webm")))
+    
+    if len(files) >= 8:
+        log_ui(f"⚡ Lite Mode: Buffer Full ({len(files)} chunks). Merging...")
+        
+        try:
+            # Merge
+            clips = [VideoFileClip(f) for f in files]
+            final_clip = concatenate_videoclips(clips, method="compose")
+            
+            merged_filename = f"merged_{uuid.uuid4().hex}.mp4"
+            merged_path = os.path.join(UPLOAD_DIR, merged_filename)
+            
+            # Write merged file (High speed)
+            final_clip.write_videofile(merged_path, codec='libx264', audio_codec='aac', preset='ultrafast', logger=None)
+            
+            # Cleanup clips from memory
+            for c in clips: c.close()
+            final_clip.close()
+            
+            # Delete buffer files
+            for f in files: os.remove(f)
+            
+            # Process the Big File
+            process_video_pipeline(merged_path, user_id, auto_upload)
+            
+        except Exception as e:
+            log_ui(f"❌ Lite Merge Error: {e}")
+            # If error, maybe delete files to prevent endless broken loop?
+            # for f in files: os.remove(f) 
+    else:
+        log_ui(f"⚡ Lite Mode: Buffering chunk {len(files)}/8...")
+
 @app.post("/upload-chunk") 
 async def upload_chunk(
     background_tasks: BackgroundTasks, 
     file: UploadFile = File(...),
     user_id: str = Form(...),
-    auto_upload: str = Form("false") # Receives "true" or "false" string
+    auto_upload: str = Form("false"),
+    is_lite: str = Form("false") # New Flag
 ):
-    is_auto = auto_upload.lower() == "true"
+    auto_up = auto_upload.lower() == "true"
+    is_lite_mode = is_lite.lower() == "true"
+    
     filename = f"chunk_{uuid.uuid4().hex}.webm"
     file_path = os.path.join(UPLOAD_DIR, filename)
+    
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    background_tasks.add_task(process_video_pipeline, file_path, user_id, is_auto)
+    if is_lite_mode:
+        # Lite Mode: Accumulate first
+        background_tasks.add_task(handle_lite_accumulation, file_path, user_id, auto_up)
+    else:
+        # Normal Mode: Process immediately
+        background_tasks.add_task(process_video_pipeline, file_path, user_id, auto_up)
+        
     return {"status": "received"}

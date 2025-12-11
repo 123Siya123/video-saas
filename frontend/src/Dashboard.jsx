@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Camera, Play, UploadCloud, Sparkles, 
   Terminal, X, Maximize2, LogOut, User, Square, Loader2, Link as LinkIcon,
-  Youtube, Instagram, Twitter, Facebook, Calendar, HelpCircle, ExternalLink, Copy, CheckCircle, FileText, Film, Trash2, SwitchCamera
+  Youtube, Instagram, Twitter, Facebook, Calendar, HelpCircle, ExternalLink, Copy, CheckCircle, FileText, Film, Trash2, SwitchCamera, Zap
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
@@ -30,9 +30,11 @@ export default function Dashboard() {
   const [gallery, setGallery] = useState([])
   const [cameraReady, setCameraReady] = useState(false)
   
-  // Camera State
-  const [facingMode, setFacingMode] = useState('user') // 'user' (front) or 'environment' (back)
-  
+  // Settings
+  const [facingMode, setFacingMode] = useState('user') 
+  const [liteMode, setLiteMode] = useState(false) // Default Normal
+  const [autoUpload, setAutoUpload] = useState(false)
+
   const [mobileTab, setMobileTab] = useState('camera') 
   const [selectedClip, setSelectedClip] = useState(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
@@ -50,9 +52,6 @@ export default function Dashboard() {
   const [postTitle, setPostTitle] = useState("")
   const [postCaption, setPostCaption] = useState("")
   const [uploadResult, setUploadResult] = useState(null)
-  
-  // Auto-Post Toggle
-  const [autoUpload, setAutoUpload] = useState(false)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -61,11 +60,13 @@ export default function Dashboard() {
   const logsEndRef = useRef(null)
   const userRef = useRef(null)
   const autoUploadRef = useRef(false)
+  const liteModeRef = useRef(false)
   
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
   useEffect(() => { autoUploadRef.current = autoUpload }, [autoUpload])
+  useEffect(() => { liteModeRef.current = liteMode }, [liteMode])
 
   const fetchConnections = async (userId) => {
       if(!userId) return
@@ -215,38 +216,39 @@ export default function Dashboard() {
       setUploadResult(null)
   }
 
-  // --- CAMERA LOGIC (Updated for Switching) ---
+  // --- CAMERA ---
   const startCamera = async (requestedMode = null) => {
-    // If a mode is requested, update state, otherwise use current state
     const modeToUse = requestedMode || facingMode;
-    
-    // Stop existing stream if any
-    if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+    if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
+
+    const constraints = { 
+        video: { 
+            width: liteMode ? { ideal: 640 } : { ideal: 1280 }, 
+            height: liteMode ? { ideal: 480 } : { ideal: 720 },
+            frameRate: { ideal: liteMode ? 24 : 30 },
+            facingMode: modeToUse 
+        }, 
+        audio: true 
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-            width: { ideal: 1920 }, 
-            height: { ideal: 1080 }, 
-            facingMode: modeToUse // Dynamic mode
-        }, 
-        audio: true 
-      })
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
       videoRef.current.srcObject = stream
       streamRef.current = stream
       videoRef.current.play()
       setCameraReady(true)
-    } catch (err) { 
-        alert("Hardware Error: " + err.message) 
-    }
+      addLog(liteMode ? "⚡ Camera: Lite Mode" : "📷 Camera: HD Mode")
+    } catch (err) { alert("Camera Error: " + err.message) }
   }
+
+  useEffect(() => {
+    if (cameraReady && streamRef.current) startCamera(facingMode)
+  }, [liteMode])
 
   const handleSwitchCamera = () => {
       const nextMode = facingMode === 'user' ? 'environment' : 'user';
       setFacingMode(nextMode);
-      startCamera(nextMode); // Restart with new mode
+      startCamera(nextMode);
   }
 
   const toggleRecording = () => { isRecording ? stopRecording() : startRecording() }
@@ -261,18 +263,37 @@ export default function Dashboard() {
 
   const recordNextChunk = () => {
     if (!streamRef.current) return
-    const recorder = new MediaRecorder(streamRef.current, { mimeType: 'video/webm' })
+    
+    // Normal Mode: High Bitrate. Lite Mode: Low Bitrate
+    const options = { mimeType: 'video/webm', videoBitsPerSecond: liteModeRef.current ? 500000 : 2500000 }
+    
+    // Safety check for browser support
+    let recorder;
+    try {
+        recorder = new MediaRecorder(streamRef.current, options)
+    } catch(e) {
+        recorder = new MediaRecorder(streamRef.current) // Fallback to default
+    }
+
     mediaRecorderRef.current = recorder
     const chunks = []
+    
     recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data) }
+    
     recorder.onstop = () => {
       const blob = new Blob(chunks, { type: 'video/webm' })
+      chunks.length = 0 // Clear RAM
       uploadChunk(blob, chunkCounter.current)
       chunkCounter.current++
       if (mediaRecorderRef.current) recordNextChunk()
     }
+    
     recorder.start()
-    setTimeout(() => { if (recorder.state === 'recording') recorder.stop() }, 120000) 
+    
+    // Normal: 120s (2 mins) | Lite: 15s
+    const interval = liteModeRef.current ? 15000 : 120000
+    
+    setTimeout(() => { if (recorder.state === 'recording') recorder.stop() }, interval) 
   }
 
   const stopRecording = () => {
@@ -286,11 +307,13 @@ export default function Dashboard() {
   const uploadChunk = async (blob, id) => {
     const userId = userRef.current ? userRef.current.id : "offline-user"
     const isAuto = autoUploadRef.current
-    
+    const isLite = liteModeRef.current
+
     const formData = new FormData()
     formData.append("file", blob, `chunk_${id}.webm`)
     formData.append("user_id", userId) 
     formData.append("auto_upload", isAuto ? "true" : "false")
+    formData.append("is_lite", isLite ? "true" : "false") // Send Lite Flag
 
     try { await axios.post(`${API_URL}/upload-chunk`, formData) } catch (err) { console.error(err) }
   }
@@ -312,7 +335,6 @@ export default function Dashboard() {
             </motion.div>
         )}
       </AnimatePresence>
-
       <AnimatePresence>
         {showConnectModal && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4">
@@ -323,50 +345,24 @@ export default function Dashboard() {
                         <div className="w-1/3 flex flex-col gap-2 border-r border-zinc-800 pr-6 overflow-y-auto">
                             {Object.entries(PLATFORM_CONFIG).map(([key, conf]) => (
                                 <div key={key} className="flex items-center gap-2 group">
-                                    <button onClick={() => { setActiveConnectTab(key); setClientId(''); setClientSecret(''); }} 
-                                        className={cn("flex-1 text-left px-3 py-3 rounded-lg text-sm font-bold flex items-center justify-between transition-colors", 
-                                        activeConnectTab === key ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:bg-zinc-800 hover:text-white")}>
+                                    <button onClick={() => { setActiveConnectTab(key); setClientId(''); setClientSecret(''); }} className={cn("flex-1 text-left px-3 py-3 rounded-lg text-sm font-bold flex items-center justify-between transition-colors", activeConnectTab === key ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:bg-zinc-800 hover:text-white")}>
                                         <div className="flex items-center gap-2"><conf.icon className={cn("w-4 h-4", activeConnectTab !== key && conf.color)} /> {conf.label}</div>
                                         {connectedPlatforms.includes(key) && <CheckCircle className="w-4 h-4 text-green-500" />}
                                     </button>
-                                    {connectedPlatforms.includes(key) && (
-                                        <button onClick={() => handleDisconnect(key)} className="p-2 text-zinc-600 hover:text-red-500 transition-colors" title="Disconnect">
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    )}
+                                    {connectedPlatforms.includes(key) && (<button onClick={() => handleDisconnect(key)} className="p-2 text-zinc-600 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>)}
                                 </div>
                             ))}
-                            <div className="mt-auto pt-6 border-t border-zinc-800">
-                                <button onClick={() => setShowCalendly(true)} className="w-full bg-green-600/10 border border-green-500/50 text-green-400 hover:bg-green-600 hover:text-white px-3 py-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all group">
-                                    <Calendar className="w-4 h-4 group-hover:scale-110 transition-transform" /> Have us add it free
-                                </button>
-                            </div>
+                            <div className="mt-auto pt-6 border-t border-zinc-800"><button onClick={() => setShowCalendly(true)} className="w-full bg-green-600/10 border border-green-500/50 text-green-400 hover:bg-green-600 hover:text-white px-3 py-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all group"><Calendar className="w-4 h-4 group-hover:scale-110 transition-transform" /> Have us add it free</button></div>
                         </div>
                         <div className="w-2/3 flex flex-col overflow-y-auto pr-2">
                             <div className="bg-zinc-950 p-5 rounded-xl border border-zinc-800 text-sm space-y-4 mb-6 text-zinc-400 leading-relaxed shadow-inner">
-                                <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
-                                    <span className="text-white font-bold flex items-center gap-2"><HelpCircle className="w-4 h-4 text-rose-500" /> Instructions</span>
-                                    <a href={PLATFORM_CONFIG[activeConnectTab].portalUrl} target="_blank" rel="noreferrer" className="text-xs text-rose-400 hover:underline flex items-center gap-1">Open Portal <ExternalLink className="w-3 h-3" /></a>
-                                </div>
-                                <ul className="list-decimal list-inside space-y-2 text-xs">
-                                    {PLATFORM_CONFIG[activeConnectTab].steps.map((step, i) => <li key={i} className="pl-1 marker:text-zinc-600">{step}</li>)}
-                                </ul>
-                                <div className="pt-2 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50 mt-4">
-                                    <p className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Redirect URI to Copy:</p>
-                                    <div className="flex items-center gap-2"><code className="bg-black px-2 py-1.5 rounded border border-zinc-800 text-green-400 select-all block w-full text-xs font-mono truncate">{window.location.origin}/auth/callback</code><button onClick={() => navigator.clipboard.writeText(`${window.location.origin}/auth/callback`)} className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400"><Copy className="w-3.5 h-3.5" /></button></div>
-                                </div>
+                                <div className="flex items-center justify-between border-b border-zinc-900 pb-2"><span className="text-white font-bold flex items-center gap-2"><HelpCircle className="w-4 h-4 text-rose-500" /> Instructions</span><a href={PLATFORM_CONFIG[activeConnectTab].portalUrl} target="_blank" rel="noreferrer" className="text-xs text-rose-400 hover:underline flex items-center gap-1">Open Portal <ExternalLink className="w-3 h-3" /></a></div>
+                                <ul className="list-decimal list-inside space-y-2 text-xs">{PLATFORM_CONFIG[activeConnectTab].steps.map((step, i) => <li key={i} className="pl-1 marker:text-zinc-600">{step}</li>)}</ul>
+                                <div className="pt-2 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50 mt-4"><p className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Redirect URI to Copy:</p><div className="flex items-center gap-2"><code className="bg-black px-2 py-1.5 rounded border border-zinc-800 text-green-400 select-all block w-full text-xs font-mono truncate">{window.location.origin}/auth/callback</code><button onClick={() => navigator.clipboard.writeText(`${window.location.origin}/auth/callback`)} className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400"><Copy className="w-3.5 h-3.5" /></button></div></div>
                             </div>
                             <div className="space-y-4 mt-auto pb-2">
-                                {connectedPlatforms.includes(activeConnectTab) ? (
-                                    <button onClick={() => handleDisconnect(activeConnectTab)} className="w-full bg-red-900/50 text-red-200 border border-red-800 font-bold py-3.5 rounded-xl hover:bg-red-900 transition-colors shadow-lg mt-2 flex items-center justify-center gap-2">
-                                        <Trash2 className="w-4 h-4" /> Disconnect {PLATFORM_CONFIG[activeConnectTab].label}
-                                    </button>
-                                ) : (
-                                    <>
-                                        <div><label className="text-xs font-bold uppercase text-zinc-500 mb-1.5 block">Client ID</label><input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm outline-none focus:border-rose-500" placeholder="Paste Client ID" /></div>
-                                        <div><label className="text-xs font-bold uppercase text-zinc-500 mb-1.5 block">Client Secret</label><input value={clientSecret} onChange={e => setClientSecret(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm outline-none focus:border-rose-500" type="password" placeholder="Paste Client Secret" /></div>
-                                        <button onClick={initConnection} className="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:bg-zinc-200 transition-colors shadow-lg mt-2">Authenticate & Connect</button>
-                                    </>
+                                {connectedPlatforms.includes(activeConnectTab) ? (<button onClick={() => handleDisconnect(activeConnectTab)} className="w-full bg-red-900/50 text-red-200 border border-red-800 font-bold py-3.5 rounded-xl hover:bg-red-900 transition-colors shadow-lg mt-2 flex items-center justify-center gap-2"><Trash2 className="w-4 h-4" /> Disconnect {PLATFORM_CONFIG[activeConnectTab].label}</button>) : (
+                                    <><div className="space-y-3"><div><label className="text-xs font-bold uppercase text-zinc-500 mb-1">Client ID</label><input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm outline-none focus:border-rose-500" /></div><div><label className="text-xs font-bold uppercase text-zinc-500 mb-1">Client Secret</label><input value={clientSecret} onChange={e => setClientSecret(e.target.value)} className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-white text-sm outline-none focus:border-rose-500" type="password" /></div></div><button onClick={initConnection} className="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:bg-zinc-200 transition-colors shadow-lg mt-2">Authenticate & Connect</button></>
                                 )}
                             </div>
                         </div>
@@ -375,7 +371,6 @@ export default function Dashboard() {
             </motion.div>
         )}
       </AnimatePresence>
-
       <AnimatePresence>
         {selectedClip && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 backdrop-blur-md p-4" onClick={() => setSelectedClip(null)}>
@@ -384,41 +379,9 @@ export default function Dashboard() {
               <div className="relative bg-black h-64 flex items-center justify-center"><video src={selectedClip.filename} className="h-full w-full object-contain" controls autoPlay /></div>
               <div className="p-5 bg-zinc-900 border-t border-zinc-800 flex-1 overflow-y-auto space-y-4">
                 {uploadResult ? (
-                    <div className="space-y-4">
-                        <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400 text-center font-bold">Upload Complete!</div>
-                        {Object.entries(uploadResult).map(([platform, res]) => (
-                            <div key={platform} className="flex items-center justify-between p-3 bg-black rounded-lg border border-zinc-800">
-                                <span className="capitalize font-bold text-sm">{platform}</span>
-                                {res.status === 'success' ? (
-                                    <a href={res.link} target="_blank" rel="noreferrer" className="text-xs bg-white text-black px-3 py-1.5 rounded-full font-bold hover:bg-zinc-200 flex items-center gap-1">View Post <ExternalLink className="w-3 h-3"/></a>
-                                ) : (
-                                    <span className="text-xs text-red-400 flex items-center gap-1"><X className="w-3 h-3"/> Failed</span>
-                                )}
-                            </div>
-                        ))}
-                        <button onClick={() => setUploadResult(null)} className="w-full bg-zinc-800 text-white py-3 rounded-xl font-bold mt-2">Upload Again</button>
-                    </div>
+                    <div className="space-y-4"><div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400 text-center font-bold">Upload Complete!</div>{Object.entries(uploadResult).map(([platform, res]) => (<div key={platform} className="flex items-center justify-between p-3 bg-black rounded-lg border border-zinc-800"><span className="capitalize font-bold text-sm">{platform}</span>{res.status === 'success' ? (<a href={res.link} target="_blank" rel="noreferrer" className="text-xs bg-white text-black px-3 py-1.5 rounded-full font-bold hover:bg-zinc-200 flex items-center gap-1">View Post <ExternalLink className="w-3 h-3"/></a>) : (<span className="text-xs text-red-400 flex items-center gap-1"><X className="w-3 h-3"/> Failed</span>)}</div>))}<button onClick={() => setUploadResult(null)} className="w-full bg-zinc-800 text-white py-3 rounded-xl font-bold mt-2">Upload Again</button></div>
                 ) : (
-                    <>
-                    <div><label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Title</label><input className="w-full bg-black border border-zinc-700 rounded p-2 text-white text-sm" value={postTitle} onChange={e => setPostTitle(e.target.value)} /></div>
-                    <div><label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Caption</label><textarea className="w-full bg-black border border-zinc-700 rounded p-2 text-white text-sm h-24 resize-none" value={postCaption} onChange={e => setPostCaption(e.target.value)} /></div>
-                    <div>
-                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Publish To</label>
-                        <div className="flex flex-wrap gap-2">
-                            {Object.keys(PLATFORM_CONFIG).map(p => {
-                                const isConnected = connectedPlatforms.includes(p);
-                                const isSelected = uploadPlatforms.includes(p);
-                                return (
-                                    <button key={p} onClick={() => toggleUploadPlatform(p)} 
-                                        className={cn("px-3 py-1.5 rounded-lg text-xs font-bold border capitalize flex items-center gap-2 transition-all", !isConnected ? "opacity-50 border-zinc-800 bg-zinc-900 text-zinc-600 grayscale" : isSelected ? "bg-white text-black border-white shadow-lg" : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:border-zinc-500")}>
-                                        {p === 'youtube' && <Youtube className="w-3 h-3" />} {p === 'instagram' && <Instagram className="w-3 h-3" />} {p}
-                                    </button>
-                                )
-                            })}
-                        </div>
-                    </div>
-                    <button onClick={handlePost} disabled={isPosting} className="w-full bg-rose-600 text-white py-3 rounded-xl font-bold hover:bg-rose-500 flex justify-center gap-2 mt-2">{isPosting ? <Loader2 className="animate-spin" /> : <UploadCloud />} Post to Selected</button>
-                    </>
+                    <><div><label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Title</label><input className="w-full bg-black border border-zinc-700 rounded p-2 text-white text-sm" value={postTitle} onChange={e => setPostTitle(e.target.value)} /></div><div><label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Caption</label><textarea className="w-full bg-black border border-zinc-700 rounded p-2 text-white text-sm h-24 resize-none" value={postCaption} onChange={e => setPostCaption(e.target.value)} /></div><div><label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Publish To</label><div className="flex flex-wrap gap-2">{Object.keys(PLATFORM_CONFIG).map(p => (<button key={p} onClick={() => toggleUploadPlatform(p)} className={cn("px-3 py-1.5 rounded-lg text-xs font-bold border capitalize flex items-center gap-2 transition-all", !connectedPlatforms.includes(p) ? "opacity-50 border-zinc-800 bg-zinc-900 text-zinc-600 grayscale" : uploadPlatforms.includes(p) ? "bg-white text-black border-white shadow-lg" : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:border-zinc-500")}>{p === 'youtube' && <Youtube className="w-3 h-3" />} {p === 'instagram' && <Instagram className="w-3 h-3" />} {p}</button>))}</div></div><button onClick={handlePost} disabled={isPosting} className="w-full bg-rose-600 text-white py-3 rounded-xl font-bold hover:bg-rose-500 flex justify-center gap-2 mt-2">{isPosting ? <Loader2 className="animate-spin" /> : <UploadCloud />} Post to Selected</button></>
                 )}
               </div>
             </motion.div>
@@ -431,20 +394,26 @@ export default function Dashboard() {
         <div className="flex items-center gap-2 font-bold text-white"><Sparkles className="w-5 h-5 text-rose-500" /> DirectorFlow</div>
         <div className="flex items-center gap-4">
             
+            {/* LITE MODE TOGGLE */}
+            <div 
+                className="flex items-center gap-2 cursor-pointer group" 
+                onClick={() => setLiteMode(!liteMode)}
+                title="Use Low Quality for Old Phones"
+            >
+                <div className={cn("w-8 h-5 rounded-full p-0.5 transition-colors relative border", liteMode ? "bg-yellow-500/20 border-yellow-500/50" : "bg-zinc-800 border-zinc-700")}>
+                    <motion.div initial={false} animate={{ x: liteMode ? 14 : 0 }} className={cn("w-3.5 h-3.5 rounded-full shadow-sm", liteMode ? "bg-yellow-400" : "bg-zinc-500")} />
+                </div>
+                <span className={cn("text-[10px] font-bold uppercase hidden sm:block", liteMode ? "text-yellow-400" : "text-zinc-500")}>Lite</span>
+            </div>
+
             {/* AUTO UPLOAD TOGGLE */}
             <div 
                 className="flex items-center gap-2 cursor-pointer group" 
                 onClick={() => setAutoUpload(!autoUpload)}
             >
-                <span className={cn("text-[10px] font-bold uppercase transition-colors hidden sm:block", autoUpload ? "text-green-400" : "text-zinc-500")}>
-                    Auto-Post
-                </span>
-                <div className={cn("w-10 h-5 rounded-full p-0.5 transition-colors relative", autoUpload ? "bg-green-500/20 border border-green-500/50" : "bg-zinc-800 border border-zinc-700")}>
-                    <motion.div 
-                        initial={false}
-                        animate={{ x: autoUpload ? 20 : 0 }}
-                        className={cn("w-3.5 h-3.5 rounded-full shadow-sm", autoUpload ? "bg-green-400" : "bg-zinc-500")}
-                    />
+                <span className={cn("text-[10px] font-bold uppercase transition-colors hidden sm:block", autoUpload ? "text-green-400" : "text-zinc-500")}>Auto</span>
+                <div className={cn("w-8 h-5 rounded-full p-0.5 transition-colors relative border", autoUpload ? "bg-green-500/20 border-green-500/50" : "bg-zinc-800 border-zinc-700")}>
+                    <motion.div initial={false} animate={{ x: autoUpload ? 14 : 0 }} className={cn("w-3.5 h-3.5 rounded-full shadow-sm", autoUpload ? "bg-green-400" : "bg-zinc-500")} />
                 </div>
             </div>
 
@@ -504,16 +473,8 @@ export default function Dashboard() {
                             <div className="flex justify-between items-end">
                                 <span className="text-[10px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded">{clip.score}/10</span>
                                 <div className="flex gap-1">
-                                    {uploadedYoutube && (
-                                        <a href={clip.social_refs.youtube} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-red-500 hover:scale-110 transition-transform">
-                                            <Youtube className="w-3.5 h-3.5" />
-                                        </a>
-                                    )}
-                                    {uploadedInsta && (
-                                        <a href={clip.social_refs.instagram} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-pink-500 hover:scale-110 transition-transform">
-                                            <Instagram className="w-3.5 h-3.5" />
-                                        </a>
-                                    )}
+                                    {uploadedYoutube && (<a href={clip.social_refs.youtube} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-red-500 hover:scale-110 transition-transform"><Youtube className="w-3.5 h-3.5" /></a>)}
+                                    {uploadedInsta && (<a href={clip.social_refs.instagram} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-pink-500 hover:scale-110 transition-transform"><Instagram className="w-3.5 h-3.5" /></a>)}
                                 </div>
                             </div>
                         </div>
@@ -523,7 +484,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* MOBILE BOTTOM NAVIGATION */}
+        {/* MOBILE NAV */}
         <div className="lg:hidden fixed bottom-0 left-0 right-0 h-16 bg-zinc-950 border-t border-zinc-800 flex items-center justify-around z-50 pb-safe">
             <button onClick={() => setMobileTab('camera')} className={cn("flex flex-col items-center gap-1", mobileTab === 'camera' ? "text-rose-500" : "text-zinc-500")}><Camera className="w-5 h-5"/><span className="text-[10px] font-bold">Cam</span></button>
             <button onClick={() => setMobileTab('gallery')} className={cn("flex flex-col items-center gap-1", mobileTab === 'gallery' ? "text-rose-500" : "text-zinc-500")}><Film className="w-5 h-5"/><span className="text-[10px] font-bold">Clips</span></button>
